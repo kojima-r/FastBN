@@ -1,181 +1,172 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Compute CPT from all_counts.tsv produced by --save-counts.
+Compute CPTs (with node/parent names and parent variable values)
+from all_counts.tsv produced by --save-counts.
 
-Input format (TSV):
-  - Comment/meta lines start with '#'
-  - Data lines: v \t j \t k|* \t n
-      k='*' means n_ij (sum over child states)
-
-Output:
-  - Single TSV (--out) with rows: v j k prob
-  - Or per-node TSV files (--out-dir), named cpt_<v>.tsv
-Smoothing:
-  P = (n_ijk + alpha/r_i) / (n_ij + alpha), alpha>=0
+Output columns:
+  node_id  node_name  parent_ids  parent_names  parent_values  j  k  prob
 """
 
 import argparse
-import math
 import os
 import sys
+import math
 from collections import defaultdict
+from itertools import product
 
 def parse_args():
-    p = argparse.ArgumentParser(
-        description="Compute CPTs from all_counts.tsv",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    p.add_argument("--counts", required=True, help="Input all_counts.tsv path")
-    out_grp = p.add_mutually_exclusive_group(required=False)
-    out_grp.add_argument("--out", help="Output single TSV (v j k prob). If omitted and --out-dir not set, prints to stdout")
-    out_grp.add_argument("--out-dir", help="Output directory for per-node TSV files (cpt_<v>.tsv)")
-    p.add_argument("--alpha", type=float, default=0.0, help="Dirichlet smoothing alpha (0.0 = MLE)")
-    p.add_argument("--precision", type=int, default=12, help="Floating output precision")
-    p.add_argument("--skip-nan", action="store_true",
-                   help="Skip rows where nij=0 and alpha=0 (would yield NaN); default prints NaN")
-    p.add_argument("--quiet", action="store_true", help="Suppress progress messages")
+    p = argparse.ArgumentParser(description="Compute CPT with parent values from all_counts.tsv")
+    p.add_argument("--counts", required=True, help="Input all_counts.tsv")
+    p.add_argument("--out", help="Output single TSV file (default: stdout)")
+    p.add_argument("--out-dir", help="Output directory for per-node TSVs (cpt_<v>.tsv)")
+    p.add_argument("--alpha", type=float, default=0.0, help="Dirichlet smoothing (default=0.0)")
+    p.add_argument("--skip-nan", action="store_true", help="Skip rows where nij=0 and alpha=0")
+    p.add_argument("--precision", type=int, default=12, help="Decimal precision")
+    p.add_argument("--quiet", action="store_true", help="Suppress info logs")
     return p.parse_args()
 
-def eprint(*a, **k):
-    print(*a, file=sys.stderr, **k)
+def eprint(*a, **k): print(*a, file=sys.stderr, **k)
+
+def decode_parent_values(j, parent_card):
+    """Return tuple of parent values corresponding to index j."""
+    if not parent_card:
+        return []
+    vals = []
+    for r in reversed(parent_card):
+        vals.append(j % r)
+        j //= r
+    return list(reversed(vals))
 
 def main():
     args = parse_args()
-    counts_path = args.counts
-    alpha = float(args.alpha)
-    prec = int(args.precision)
-    if args.out_dir:
-        os.makedirs(args.out_dir, exist_ok=True)
+    alpha = args.alpha
+    prec = args.precision
 
-    # Sparse accumulators
-    # n_ijk[(v,j,k)] = count ; n_ij[(v,j)] = count
     n_ijk = defaultdict(int)
-    n_ij  = defaultdict(int)
+    n_ij = defaultdict(int)
+    max_k_for_v = defaultdict(int)
+    max_j_for_v = defaultdict(int)
+    node_name = {}
+    parent_ids = defaultdict(list)
+    parent_names = defaultdict(list)
+    parent_card = defaultdict(list)   # v -> [ri of each parent]
 
-    # Track per node maximum k and j to infer r_i, q_i
-    max_k_for_v = defaultdict(int)    # r_i = max_k+1
-    max_j_for_v = defaultdict(int)    # q_i = max_j+1
+    current_node = None
 
-    total_lines = 0
-    data_lines = 0
-
-    # Stream read
-    with open(counts_path, "r", encoding="utf-8") as f:
+    with open(args.counts, encoding="utf-8") as f:
         for line in f:
-            total_lines += 1
-            if not line or line[0] == "#":
+            if not line.strip():
                 continue
+            if line.startswith("#"):
+                s = line[1:].strip()
+                if s.startswith("--- node"):
+                    try:
+                        current_node = int(s.split()[2])
+                    except Exception:
+                        current_node = None
+                elif s.startswith("node_name") and current_node is not None:
+                    _, val = s.split("\t", 1)
+                    node_name[current_node] = val.strip()
+                elif s.startswith("parents_indices") and current_node is not None:
+                    try:
+                        _, val = s.split("\t", 1)
+                        ids = [int(x.strip()) for x in val.split(",") if x.strip()]
+                        parent_ids[current_node] = ids
+                    except Exception:
+                        parent_ids[current_node] = []
+                elif s.startswith("parents_names") and current_node is not None:
+                    try:
+                        _, val = s.split("\t", 1)
+                        names = [x.strip() for x in val.split(",") if x.strip()]
+                        parent_names[current_node] = names
+                    except Exception:
+                        parent_names[current_node] = []
+                elif s.startswith("parents_cardinalities") and current_node is not None:
+                    # optional metadata if available
+                    try:
+                        _, val = s.split("\t", 1)
+                        parent_card[current_node] = [int(x.strip()) for x in val.split(",") if x.strip()]
+                    except Exception:
+                        pass
+                continue
+
             parts = line.rstrip("\n").split("\t")
             if len(parts) != 4:
-                # tolerant: try splitting by whitespace
-                parts = line.split()
-                if len(parts) != 4:
-                    continue
+                continue
             vstr, jstr, kstr, nstr = parts
             try:
                 v = int(vstr); j = int(jstr); n = int(nstr)
-            except Exception:
-                # non-data line
+            except:
                 continue
-
             if kstr == "*" or kstr == "'*'":
                 n_ij[(v, j)] += n
-                if j > max_j_for_v[v]: max_j_for_v[v] = j
-                data_lines += 1
-                continue
+                max_j_for_v[v] = max(max_j_for_v[v], j)
+            else:
+                try:
+                    k = int(kstr)
+                except:
+                    continue
+                n_ijk[(v, j, k)] += n
+                max_j_for_v[v] = max(max_j_for_v[v], j)
+                max_k_for_v[v] = max(max_k_for_v[v], k)
 
-            try:
-                k = int(kstr)
-            except Exception:
-                # malformed
-                continue
+    vs = set(v for (v, _) in n_ij.keys()) | set(v for (v, _, _) in n_ijk.keys())
+    fmt = f"{{:.{prec}g}}"
 
-            n_ijk[(v, j, k)] += n
-            if j > max_j_for_v[v]: max_j_for_v[v] = j
-            if k > max_k_for_v[v]: max_k_for_v[v] = k
-            data_lines += 1
-
-    if not args.quiet:
-        eprint(f"[info] read {data_lines} data lines (total {total_lines}) from {counts_path}")
-
-    # Helper to compute CPT rows for a node v
-    def cpt_rows_for_node(v):
-        # infer r_i, q_i from maxima (fallback to 1 if absent)
+    def cpt_rows(v):
         r_i = (max_k_for_v[v] + 1) if v in max_k_for_v else 1
         q_i = (max_j_for_v[v] + 1) if v in max_j_for_v else 1
+        pids = parent_ids.get(v, [])
+        pnames = parent_names.get(v, [])
+        pcards = parent_card.get(v, [])
 
-        # For each j in [0, q_i):
         for j in range(q_i):
-            # nij: prefer explicit n_ij; otherwise sum over k present
-            nij = n_ij.get((v, j), None)
-            if nij is None:
-                # compute from n_ijk sparse entries
-                s = 0
-                # iterate only known ks; to avoid O(r_i) scan over all k, collect from dict
-                # but dict is sparse; generate keys present for this (v,j,*)
-                # This is still O(#present k for (v,j,*))
-                for kk in range(r_i):
-                    s += n_ijk.get((v, j, kk), 0)
-                nij = s
-
+            nij = n_ij.get((v, j), sum(n_ijk.get((v, j, k), 0) for k in range(r_i)))
             denom = nij + alpha
+            pvals = decode_parent_values(j, pcards) if pcards else []
             for k in range(r_i):
                 nijk = n_ijk.get((v, j, k), 0)
-                numer = nijk + alpha / r_i if alpha > 0.0 else nijk
-
-                if denom == 0.0:
-                    # alpha==0 and nij==0 → undefined (NaN) or skip
-                    if alpha == 0.0:
+                numer = nijk + alpha / r_i if alpha > 0 else nijk
+                if denom == 0:
+                    if alpha == 0:
                         if args.skip_nan:
                             continue
-                        prob = float('nan')
+                        prob = float("nan")
                     else:
-                        prob = 1.0 / r_i  # (0 + a/r) / (0 + a)
+                        prob = 1.0 / r_i
                 else:
                     prob = numer / denom
+                yield (v, node_name.get(v, f"X{v}"),
+                       ",".join(map(str, pids)),
+                       ",".join(pnames),
+                       ",".join(map(str, pvals)) if pvals else "",
+                       j, k, prob)
 
-                yield (v, j, k, prob)
-
-    # Output
-    fmt = f"{{:.{prec}g}}"  # compact with given precision
+    header = "node_id\tnode_name\tparent_ids\tparent_names\tparent_values\tj\tk\tprob\n"
 
     if args.out_dir:
-        # per-node files
-        written = 0
-        # nodes present in either dict:
-        vs_present = set(v for (v, _) in n_ij.keys()) | set(v for (v, _, _) in n_ijk.keys())
-        if not vs_present:
-            # fallback to 0..max_v
-            vs_present = set(list(max_j_for_v.keys()) + list(max_k_for_v.keys()))
-        for v in sorted(vs_present):
-            path = os.path.join(args.out_dir, f"cpt_{v}.tsv")
-            with open(path, "w", encoding="utf-8") as g:
-                g.write("v\tj\tk\tprob\n")
-                for (vv, j, k, p) in cpt_rows_for_node(v):
-                    g.write(f"{vv}\t{j}\t{k}\t{fmt.format(p)}\n")
-            written += 1
+        os.makedirs(args.out_dir, exist_ok=True)
+        for v in sorted(vs):
+            with open(os.path.join(args.out_dir, f"cpt_{v}.tsv"), "w", encoding="utf-8") as g:
+                g.write(header)
+                for row in cpt_rows(v):
+                    g.write("\t".join(map(str, row[:-1])) + f"\t{fmt.format(row[-1])}\n")
         if not args.quiet:
-            eprint(f"[info] wrote CPTs for {written} nodes into: {args.out_dir}")
+            eprint(f"[info] wrote CPTs with parent values into {args.out_dir}")
     else:
-        # single TSV to file or stdout
-        out_stream = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
-        close_needed = (out_stream is not sys.stdout)
+        out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
+        close = (out is not sys.stdout)
         try:
-            out_stream.write("v\tj\tk\tprob\n")
-            # nodes present (as above)
-            vs_present = set(v for (v, _) in n_ij.keys()) | set(v for (v, _, _) in n_ijk.keys())
-            if not vs_present:
-                vs_present = set(list(max_j_for_v.keys()) + list(max_k_for_v.keys()))
-            for v in sorted(vs_present):
-                for (vv, j, k, p) in cpt_rows_for_node(v):
-                    out_stream.write(f"{vv}\t{j}\t{k}\t{fmt.format(p)}\n")
+            out.write(header)
+            for v in sorted(vs):
+                for row in cpt_rows(v):
+                    out.write("\t".join(map(str, row[:-1])) + f"\t{fmt.format(row[-1])}\n")
         finally:
-            if close_needed:
-                out_stream.close()
+            if close:
+                out.close()
         if not args.quiet:
-            target = args.out if args.out else "<stdout>"
-            eprint(f"[info] wrote CPTs to {target}")
+            eprint(f"[info] CPTs written to {args.out or '<stdout>'}")
 
 if __name__ == "__main__":
     main()

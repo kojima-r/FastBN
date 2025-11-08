@@ -1127,74 +1127,47 @@ static DAG loadInitEdges(int D, const string& path) {
 //        v <tab> j <tab> * <tab> n_ij     （* は合計を表す）
 //   ・n=0 の行は省略（ファイルサイズ節約）
 // ================================================
-void saveAllCountsTSV(const std::string& outfile,
-                      const Dataset& ds,
-                      const DAG& g,
-                      const std::vector<Counts>& counts)
-{
-    std::ofstream fout(outfile);
-    if (!fout) {
-        throw std::runtime_error("Failed to open --save-counts: " + outfile);
-    }
+void saveAllCountsTSV(const std::string& path, const Dataset& ds, const DAG& g) {
+    std::ofstream fout(path);
+    if (!fout) throw std::runtime_error("open failed: " + path);
 
-    // グローバルヘッダ（コメント）
-    fout << "# CPT counts (TSV)\n";
-    fout << "# N\t" << ds.N << "\n";
-    fout << "# D\t" << ds.D << "\n";
-    fout << "# row format: node_index\\tj\\tk\\tn ; k='*' means n_ij (sum over child states)\n";
-    fout << "# parent order = g.parents(v)（右端が最下位桁の混合基数）\n";
-
-    // 各ノード v ごとに、メタ情報 → 明細（n_ijk と n_ij）の順で出力
     for (int v = 0; v < ds.D; ++v) {
-        const auto parents = g.parents(v);
-        const Counts& C = counts[v];
+        auto pa = g.parents(v);
 
-        // --- ノードのメタ情報（コメント） ---
+        // メタ情報（親が空なら空行を出す）
         fout << "# --- node " << v << " ---\n";
-        if (!ds.var_names.empty()) {
-            fout << "# node_name\t" << ds.var_names[v] << "\n";
-        }
+        fout << "# node_name\t" << (v < (int)ds.var_names.size() ? ds.var_names[v] : ("X"+std::to_string(v))) << "\n";
         fout << "# parents_indices\t";
-        for (size_t i = 0; i < parents.size(); ++i) {
-            if (i) fout << ",";
-            fout << parents[i];
+        for (size_t t=0; t<pa.size(); ++t) fout << (t? ",":"") << pa[t];
+        fout << "\n# parents_names\t";
+        for (size_t t=0; t<pa.size(); ++t) {
+            int p = pa[t];
+            fout << (t? ",":"") << (p < (int)ds.var_names.size() ? ds.var_names[p] : ("X"+std::to_string(p)));
         }
-        fout << "\n";
-        if (!ds.var_names.empty()) {
-            fout << "# parents_names\t";
-            for (size_t i = 0; i < parents.size(); ++i) {
-                if (i) fout << ",";
-                fout << ds.var_names[parents[i]];
-            }
-            fout << "\n";
-        }
-        fout << "# parents_cardinalities\t";
-        for (size_t i = 0; i < parents.size(); ++i) {
-            if (i) fout << ",";
-            fout << ds.r[parents[i]];
-        }
-        fout << "\n";
-        fout << "# child_cardinality\t" << ds.r[v] << "\n";
+        fout << "\n# parents_cardinalities\t";
+        for (size_t t=0; t<pa.size(); ++t) fout << (t? ",":"") << ds.r[pa[t]];
+        fout << "\n# child_cardinality\t" << ds.r[v] << "\n";
 
-        // --- 明細本体：v, j, k, n_ijk（非ゼロのみ） ---
-        // n_ijk
-        for (int j = 0; j < C.q_i; ++j) {
-            const size_t base = (size_t)j * C.r_i;
-            for (int k = 0; k < C.r_i; ++k) {
-                long long nijk = C.n_ijk[base + k];
-                if (nijk == 0) continue;     // 0 は省略
-                fout << v << '\t' << j << '\t' << k << '\t' << nijk << '\n';
-            }
-        }
-        // n_ij（合計）: k='*'
-        for (int j = 0; j < C.q_i; ++j) {
+        // 再度カウント（q_i は親配置数）
+        Counts C = computeCountsForNode_full(v, pa, ds);
+        const int r_i = C.r_i;         // 子の取りうる値の数
+        int q_i = C.q_i;               // 親配置数
+        if (pa.empty()) q_i = 1;       // 念のため明示
+
+        // j は 0..q_i-1 で回すのが正しい
+        for (int j = 0; j < q_i; ++j) {
             long long nij = C.n_ij[j];
-            if (nij == 0) continue;
-            fout << v << '\t' << j << '\t' << "*\t" << nij << '\n';
+
+            // 各 k 行（ゼロは省略
+            for (int k = 0; k < r_i; ++k) {
+                long long nijk = C.n_ijk[(size_t)j*r_i + k];
+                if (nijk == 0) continue;  // 省略したくない場合は消す
+                fout << v << "\t" << j << "\t" << k << "\t" << nijk << "\n";
+            }
+            // 合計行は必ず出す
+            fout << v << "\t" << j << "\t*\t" << nij << "\n";
         }
     }
-
-    fout.close();
 }
 
 // ============ all_counts.tsv ロード ============
@@ -2231,7 +2204,8 @@ int main(int argc, char** argv){
         // 全ノード分のカウントを 1 ファイル（TSV）にまとめて出力
         if (!save_counts_path.empty()) {
             try {
-                saveAllCountsTSV(save_counts_path, ds, g, hc.nodeCounts);
+                //saveAllCountsTSV(save_counts_path, ds, g, hc.nodeCounts);
+                saveAllCountsTSV(save_counts_path, ds, g);
                 std::cerr << "[info] wrote all CPT counts (TSV) to " << save_counts_path << "\n";
             } catch (const std::exception& e) {
                 std::cerr << "Error: cannot write --save-counts: " << e.what() << "\n";
