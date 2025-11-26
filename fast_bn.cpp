@@ -108,11 +108,16 @@ static double chisq_p_upper(double chi2, int df) {
 
 enum class ScoreType { BIC, K2, BDeu };
 struct Dataset {
-    vector<vector<int>> X;     // N×D データ本体
+    //vector<vector<int>> X;     // N×D データ本体
+    vector<int> X_flat;
+    
     int N=0, D=0;
     vector<int> r;             // 各列の基数
     vector<string> var_names;  // 変数名（CSV/TSV のヘッダ）
-
+    // accessor
+    inline int x(int n, int d) const noexcept {
+        return X_flat[(size_t)n * D + d];
+    }
     // CSV または TSV を読み込み（区切り文字を自動判定）
     static Dataset fromCSV(const string& path) {
         ifstream fin(path);
@@ -182,11 +187,17 @@ struct Dataset {
         }
 
         Dataset ds;
-        ds.X = move(rows);
-        ds.N = (int)ds.X.size();
+        //ds.X = move(rows);
+        ds.N = (int)rows.size();
         ds.D = D;
         ds.r = move(rcard);
         ds.var_names = move(headers);
+        ds.X_flat.resize((size_t)ds.N * ds.D);
+        for (int n = 0; n < ds.N; ++n) {
+            const auto &row = rows[n];
+            std::copy(row.begin(), row.end(),
+                      ds.X_flat.begin() + (size_t)n * ds.D);
+        }
 
         cerr << "[info] Loaded " << ds.N << " samples, "
              << ds.D << " variables, delimiter='" << (delim=='\t' ? "\\t" : ",") << "'\n";
@@ -200,12 +211,16 @@ static Dataset bootstrapResampleDataset(const Dataset& ds, std::mt19937_64& rng)
     out.N = ds.N;
     out.r = ds.r;
     out.var_names = ds.var_names;
-    out.X.resize(ds.N, std::vector<int>(ds.D, 0));
+    //out.X.resize(ds.N, std::vector<int>(ds.D, 0));
+    out.X_flat.resize((size_t)out.N * out.D);
 
     std::uniform_int_distribution<int> uid(0, ds.N - 1);
     for (int n = 0; n < ds.N; ++n) {
         int src = uid(rng);          // 復元抽出
-        out.X[n] = ds.X[src];        // 行コピー
+        //out.X[n] = ds.X[src];        // 行コピー
+	std::copy(ds.X_flat.begin() + (size_t)src * ds.D,
+                  ds.X_flat.begin() + (size_t)(src + 1) * ds.D,
+                  out.X_flat.begin() + (size_t)n * ds.D);
     }
     return out;
 }
@@ -362,24 +377,67 @@ inline int mixedRadixIndex(const vector<int>& parents, const vector<int>& r, con
     return qidx;
 }
 
+// 親集合 parents に対する右からの混合基数(radix)を前計算する。
+//  parents: 親ノードのインデックス（例: [p0, p1, ..., p_{P-1}]）
+//  r      : 各変数の取りうる値の数 r[i]
+//  radix  : 出力 (サイズ P)。j = Σ ds.x(n, parents[t]) * radix[t] で使用。
+static inline void build_mixed_radix(const std::vector<int>& parents,
+                                     const std::vector<int>& r,
+                                     std::vector<int>& radix) noexcept
+{
+    const int P = (int)parents.size();
+    if (P <= 0) {
+        radix.clear();
+        return;
+    }
+    // 既存容量を再利用しつつ、サイズだけ合わせる
+    radix.assign(P, 1);
+    // 右から順に混合基数を構成
+    for (int t = P - 2; t >= 0; --t) {
+        radix[t] = radix[t + 1] * r[parents[t + 1]];
+    }
+}
+
+// 1サンプル n について、parents の値から混合基数インデックス j を計算。
+//  事前に build_mixed_radix(parents, r, radix) 済みであることが前提。
+static inline int mixed_radix_index_row(const Dataset& ds,
+                                        int n,
+                                        const std::vector<int>& parents,
+                                        const std::vector<int>& radix) noexcept
+{
+    const int P = (int)parents.size();
+    int j = 0;
+    for (int t = 0; t < P; ++t) {
+        const int p = parents[t];
+        j += ds.x(n, p) * radix[t];   // ★フラット配列アクセス
+    }
+    return j;
+}
+
 // 親集合 Pa(i) に対する counts のフル再集計（O(N)）
-// ※ 本実装では、ADD のときは分割のため O(N) が不可避だが、REMOVE は完全インクリメンタル化する。
+// 本実装では、ADD のときは分割のため O(N) が不可避だが、REMOVE は完全インクリメンタル化する。
 Counts computeCountsForNode_full(int i, const vector<int>& parents, const Dataset& ds){
-    int r_i = ds.r[i];
-    int q_i = 1; for (int p: parents) q_i *= ds.r[p];
+    const int N   = ds.N;
+    const int r_i = ds.r[i];
+    int q_i = 1;
+    for (int p: parents) q_i *= ds.r[p];
+    
     vector<long long> nij(q_i,0), nijk((size_t)q_i*r_i,0);
 
     if (parents.empty()){
         // 親無し: j は常に 0
         for (int n=0;n<ds.N;++n){
-            int k=ds.X[n][i];
+            int k=ds.x(n, i);
             ++nijk[k];
         }
-        nij.assign(1, (long long)ds.N);
+        nij.assign(1, (long long)N);
     } else {
-        for (int n=0;n<ds.N;++n){
-            int j = mixedRadixIndex(parents, ds.r, ds.X[n]);
-            int k = ds.X[n][i];
+	std::vector<int> radix;
+        build_mixed_radix(parents, ds.r, radix);
+        for (int n=0;n<N;++n){
+            //int j = mixedRadixIndex(parents, ds.r, ds.X[n]);
+            const int j = mixed_radix_index_row(ds, n, parents, radix);
+	    const int k = ds.x(n, i);
             ++nijk[(size_t)j*r_i + k];
             ++nij[j];
         }
@@ -492,18 +550,13 @@ struct JIndexCache {
     // 親集合 Pa(v) に合わせて j_index を構築（O(N·|Pa|)）
     void build(int v, vector<int>& out) const {
         auto pa = g->parents(v);
-        out.assign(ds->N, 0);
+	const int N = ds->N;
+        out.assign(N, 0);
         if (pa.empty()) return;
-
-        // 右からの混合基数（radix）を前計算
-        vector<int> radix(pa.size(),1);
-        for (int t=(int)pa.size()-2; t>=0; --t) radix[t] = radix[t+1]*ds->r[pa[t+1]];
-
-        for (int n=0;n<ds->N;++n){
-            int j=0;
-            for (int t=0;t<(int)pa.size();++t){
-                j += ds->X[n][pa[t]] * radix[t];
-            }
+        std::vector<int> radix;
+        build_mixed_radix(pa, ds->r, radix);
+        for (int n=0;n<N;++n){
+	    const int j = mixed_radix_index_row(*ds, n, pa, radix);
             out[n]=j;
         }
     }
@@ -552,7 +605,7 @@ struct AssocCandidates {
         auto key = [&](int a,int b)->long long { return (long long)a * (long long)rv + b; };
 
         for (int idx: rows){
-            int a = ds.X[idx][u], b = ds.X[idx][v];
+            int a = ds.x(idx,u), b = ds.x(idx,v);
             ++cu[a]; ++cv[b]; ++cuv[key(a,b)];
         }
         double N = (double)rows.size();
@@ -577,7 +630,7 @@ struct AssocCandidates {
         std::vector<long long> tab((size_t)ru * rv, 0);
 
         for (int idx: rows){
-            int a = ds.X[idx][u], b = ds.X[idx][v];
+            int a = ds.x(idx,u), b = ds.x(idx,v);
             ++cu[a]; ++cv[b];
             ++tab[(size_t)a * rv + b];
         }
@@ -682,7 +735,7 @@ struct MICandidates {
         auto key = [&](int a,int b)->long long { return (long long)a * (long long)rv + b; };
 
         for (int idx: rows){
-            int au = ds.X[idx][u], bv = ds.X[idx][v];
+            int au = ds.x(idx,u), bv = ds.x(idx,v);
             ++cu[au]; ++cv[bv]; ++cuv[key(au,bv)];
         }
 
@@ -833,24 +886,60 @@ struct HillClimber {
     // 返値: Δスコア（after - before）。生成した newC は呼び出し側で適用に使う。
     double deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
         const Counts& curC = nodeCounts[v];
-        const vector<int>& jindex = jcache.get(v); // Pa(v) に対応する j_index（キャッシュから取得）
-        int ru = ds.r[u];
-        int r_i = curC.r_i;
-        int q   = max(1, curC.q_i);
-        int qp  = q * ru;
+        const int N = ds.N;
+        const int ru = ds.r[u];
+        const int r_i = curC.r_i;
 
-        newC.q_i = qp; newC.r_i = r_i;
+        // 親なしの場合は j_index を呼ばない
+        if (curC.q_i == 0) {
+            const int q = 1;
+            const int qp = q * ru; // = ru
+
+            newC.q_i = qp;
+            newC.r_i = r_i;
+            newC.n_ij.assign(qp, 0);
+            newC.n_ijk.assign((size_t)qp * r_i, 0);
+
+            auto * __restrict nij  = newC.n_ij.data();
+            auto * __restrict nijk = newC.n_ijk.data();
+
+            // 各サンプルについて j' と k を1回で決めてカウント
+            for (int n = 0; n < N; ++n) {
+                const int xu = ds.x(n, u);   // フラット配列アクセス
+                const int k  = ds.x(n, v);
+                const int j2 = xu;           // j=0 なので j2 = xu
+
+                ++nij[j2];
+                ++nijk[(size_t)j2 * r_i + k];
+            }
+
+            double after = scorer.nodeScore(newC);
+            return after - nodeScoreNow[v];
+        }
+
+        // 親ありの場合
+        const vector<int>& jindex = jcache.get(v); // Pa(v) に対応する j_index（キャッシュから取得）
+        const int q   = curC.q_i;
+        const int qp  = q * ru;
+
+        newC.q_i = qp;
+        newC.r_i = r_i;
         newC.n_ij.assign(qp, 0);
-        newC.n_ijk.assign((size_t)qp*r_i, 0);
+        newC.n_ijk.assign((size_t)qp * r_i, 0);
+
+        auto * __restrict nij  = newC.n_ij.data();
+        auto * __restrict nijk = newC.n_ijk.data();
+        const int * __restrict jptr = jindex.data();
 
         // 各サンプルについて j' と k を1回で決めてカウント
-        for (int n=0;n<ds.N;++n){
-            int j = (curC.q_i==0? 0 : jindex[n]);
-            int xu = ds.X[n][u];
-            int k  = ds.X[n][v];
-            int j2 = j*ru + xu;                  // 新しい親配置インデックス
-            ++newC.n_ij[j2];
-            ++newC.n_ijk[(size_t)j2*r_i + k];
+        for (int n = 0; n < N; ++n) {
+            const int j  = jptr[n];
+            const int xu = ds.x(n, u);   // フラット配列アクセス
+            const int k  = ds.x(n, v);
+            const int j2 = j * ru + xu;
+
+            ++nij[j2];
+            ++nijk[(size_t)j2 * r_i + k];
         }
 
         double after = scorer.nodeScore(newC);
@@ -1290,11 +1379,11 @@ static double computeLogLikelihoodOnDataset(const Dataset& ds_new,
                 int mult = 1;
                 for (int t=(int)parents.size()-1; t>=0; --t){
                     int p = parents[t];
-                    j += ds_new.X[n][p] * mult;
+                    j += ds_new.x(n,p) * mult;
                     mult *= ds_new.r[p];
                 }
             }
-            int k = ds_new.X[n][v];
+            int k = ds_new.x(n,v);
             const Counts& Cv = C[v];
             if (j<0 || j>=Cv.q_i) {
                 // counts に存在しない親配置（例えば子や親の基数が異なる等）
@@ -1326,7 +1415,7 @@ static double computeLogLikelihoodOnDataset(const Dataset& ds_new,
     if (out_avg_per_var)    *out_avg_per_var    = LL / (double)(N * D);
     if (out_zero_hits)      *out_zero_hits      = zero_hits;
     return LL;
-}
+};
 
 struct DeltaStats {
     double mean = std::numeric_limits<double>::quiet_NaN();
@@ -1341,14 +1430,10 @@ static vector<int> buildJIndexForParents(const Dataset& ds,
     vector<int> jidx(ds.N, 0);
     if (parents.empty()) return jidx;
     // 右端の親が最下位桁になる混合基数
-    vector<int> radix(parents.size(), 1);
-    for (int t=(int)parents.size()-2; t>=0; --t)
-        radix[t] = radix[t+1] * ds.r[parents[t+1]];
-
+    std::vector<int> radix;
+    build_mixed_radix(parents, ds.r, radix);
     for (int n=0; n<ds.N; ++n) {
-        int j=0;
-        for (int t=0; t<(int)parents.size(); ++t)
-            j += ds.X[n][parents[t]] * radix[t];
+	const int j = mixed_radix_index_row(ds, n, parents, radix);
         jidx[n]=j;
     }
     return jidx;
@@ -1392,7 +1477,7 @@ DeltaStats perSampleDeltaLogLStats(const Dataset& ds_new,
     long double sum = 0.0L, sum2 = 0.0L;
 
     for (int n=0; n<ds_new.N; ++n) {
-        int kx = ds_new.X[n][v];
+        int kx = ds_new.x(n,v);
         double p_b = prob_from_counts(C_before, j_before[n], kx);
         double p_a = prob_from_counts(C_after , j_after [n], kx);
         double lb = (p_b>0.0 ? std::log(p_b) : -INFINITY);
