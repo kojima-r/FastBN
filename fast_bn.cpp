@@ -1717,7 +1717,7 @@ void runBootstrapStructureCounts(const Dataset& ds,
                 ds, topK, budget, rows, rng, cand_metric, mi_threshold, chi2_p_threshold
             );
         }
-
+        
         // 4) 探索器の構築 & 実行（学習本体）
         HillClimber hc(ds_b, score_type, ess_for_bdeu, init, reach_mode, jindex_cache_cap);
         hc.max_iter = iters;
@@ -2180,6 +2180,7 @@ int main(int argc, char** argv){
             return 2;
         }
     }
+    // 単純な探索モード
     try{
         Dataset ds = Dataset::fromCSV(input_path);
         DAG init = loadInitEdges(ds.D, init_path);
@@ -2206,7 +2207,15 @@ int main(int argc, char** argv){
             );
             if (verbose) cerr << "[mi] topK="<<K<<" sample="<<rows.size()<<" budget="<<budget<<"\n";
         }
-
+        {
+	    for(int i=0;i<topKlist.size();++i){
+		std::cout << i << " ";
+	    	for(int j=0;j<topKlist[i].size();++j){
+		    std::cout << topKlist[i][j] << " ";
+		}
+	    	std::cout<<std::endl;
+	    }
+	}
         // --- 終了時間計測 ---
         auto t_end_klist = clock::now();
         std::chrono::duration<double> elapsed_klist = t_end_klist - t_start_klist;
@@ -2244,9 +2253,9 @@ int main(int argc, char** argv){
         // 結果出力
         cout << fixed << setprecision(6);
         cout << "# learned_score="<<score<<"\n";
-        cout << "# edges (u v as u->v):\n";
         // グラフ出力
         /*
+        cout << "# edges (u v as u->v):\n";
         for (auto &e : g.edges()) {
             if (!ds.var_names.empty()) {
                 cout << ds.var_names[e.first] << "\t" << ds.var_names[e.second] << "\n";
