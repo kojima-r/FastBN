@@ -1987,7 +1987,7 @@ int main(int argc, char** argv){
 
     if (argc == 1){
         cerr << "Usage:\n"
-             << "  "<<argv[0]<<" <csv_path> <score(bic|k2|bdeu)>\n"
+             << "  "<<argv[0]<<" --input <csv_path> --score <score(bic|k2|bdeu)>\n"
              << "    [--ess E] [--init init_edges.txt]\n"
              << "    [--tabu T] [--iters N] [--quiet]\n"
              << "    [--max-parents M] [--max-children M]\n"

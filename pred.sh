@@ -4,19 +4,19 @@
 #  --save init_edges.tsv \
 #  --save-names init_edges_named.tsv \
 #  --save-counts all_counts.tsv
-./fast_bn dummy bic \
-  --score-dataset all_disc.tsv \
-  --init init_edges.tsv \
-  --counts all_counts.tsv \
+./fast_bn --input dummy --score bic \
+  --score-dataset data/all_disc10.tsv \
+  --init out/init_edges.tsv \
+  --counts out/all_counts.tsv \
   --alpha 1.0
 
 
-./fast_bn dummy bic \
+./fast_bn --input dummy --score bic \
   --edge-importance \
-  --score-dataset all_disc.tsv \
-  --init init_edges.tsv \
-  --counts all_counts.tsv \
+  --score-dataset data/all_disc10.tsv \
+  --init out/init_edges.tsv \
+  --counts out/all_counts.tsv \
   --alpha 1.0 \
   --ess 10.0 \
-  --save-edge-importance edge_importance.tsv
+  --save-edge-importance out/edge_importance.tsv
 
