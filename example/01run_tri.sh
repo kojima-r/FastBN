@@ -1,6 +1,6 @@
 bin=../fast_bn
-input=./data_bin/all_disc100.tsv
-output=./out
+input=./data_tri/all_disc_tri100.tsv
+output=./out_tri
 mkdir -p ${output}
 
 ${bin} --input ${input} --score bdeu \
