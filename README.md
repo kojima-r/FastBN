@@ -28,8 +28,11 @@ Includes:
 Requires **g++ 13+** and standard libraries only (no external deps).
 
 ```bash
-g++ -O3 -std=c++17 fast_bn.cpp -o fast_bn
+g++ -O3 -march=native -std=c++17 fast_bn.cpp -o fast_bn
 ```
+(see `compile.sh`)
+
+If you want to compile with the gprof profiler, see `compile_prof.sh`
 
 ---
 
