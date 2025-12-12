@@ -55,6 +55,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Compute bootstrap probability from edge_seed****.tsv")
     p.add_argument("--input", required=True, nargs="*", type=str, help="directory .tsv")
     p.add_argument("--out", type=str, default="", help="Output single TSV file (default: stdout)")
+    p.add_argument("--out-edge", type=str, default="", help="Output single TSV file (only edge)")
     p.add_argument("--threshold-prob", type=float, default=0.2, help="bootstrap probability threshold (default=0.1)")
     p.add_argument("--threshold-count", type=int, default=2, help="bootstrap count threshold (default=2)")
     p.add_argument("--remove-cycle", action="store_true", help="Suppress info logs")
@@ -155,7 +156,13 @@ def main():
         for _, v in sorted(new_graph, reverse=out_sort_by_prob):
             s="\t".join(v)
             print(s)
-
+    if args.out_edge!="":
+        with open(args.out_edge,"w") as ofp:
+            for _, v in sorted(new_graph, reverse=out_sort_by_prob):
+                s="\t".join(v[:2])
+                ofp.write(s)
+                ofp.write("\n")
+ 
 if __name__ == "__main__":
     main()
 
