@@ -34,7 +34,7 @@ static double regularized_gamma_Q(double s, double x) {
     double f = 0.0;
 
     // 初期化
-    double a0 = 0.0;
+//    double a0 = 0.0;
     double b0 = x + 1.0 - s;
     D = 1.0 / std::max(1e-300, b0);
     C = std::max(1e-300, b0);

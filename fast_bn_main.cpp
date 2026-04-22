@@ -10,6 +10,10 @@
 #include "fast_bn_dag.hpp"
 #include "fast_bn_score.hpp"
 
+#ifdef __NVCOMPILER
+#include <openacc.h>
+#endif
+
 static void print_help() {
     const char* env_lang = std::getenv("LANG");
     std::string lang = (env_lang ? std::string(env_lang) : "ja");
@@ -212,6 +216,10 @@ Output & runtime:
 }
 
 int main(int argc, char** argv){
+#ifdef __NVCOMPILER
+    acc_init(acc_device_nvidia);
+    std::cout << "Device Type: " << acc_get_device_type() << std::endl;
+#endif
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
@@ -263,7 +271,7 @@ int main(int argc, char** argv){
     int bootstrap_B = 0;                 // >0 でブートストラップ実行
     uint64_t seed = 2025;  // 既定シード
     std::string save_bootstrap_counts;   // 出力TSV
-    bool bootstrap_include_zero = false; // 0カウントも出すか
+//    bool bootstrap_include_zero = false; // 0カウントも出すか
     std::string cand_metric_str = "mi";   // "mi" | "chi2"
     double mi_threshold = 0.0;           // MIの閾値：単位は ナチュラル対数（nats）
     double chi2_p_threshold = 1.0;       // 採用は p <= しきい値
@@ -325,6 +333,12 @@ int main(int argc, char** argv){
         // 入力データ（CSV/TSV・ヘッダあり）
         Dataset ds = Dataset::fromCSV(input_path);
 
+        const int D = ds.D;
+        const int N = ds.N;
+        const int* ds_x_ptr = ds.X_flat.data();
+        const int* ds_r_ptr = ds.r.data();
+        #pragma acc enter data copyin(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+
         // 既存のオプション（score, ess, init, tabu, iters, max-parents/children, topK, mi_sample, mi_budget, reach_mode, jindex_cache_cap）
         runBootstrapStructureCounts(
           ds, sc, ess, init_path,
@@ -337,6 +351,7 @@ int main(int argc, char** argv){
           bootstrap_B, seed,
           save_bootstrap_counts
         );
+        #pragma acc exit data delete(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
         // --- 終了時間計測 ---
         auto t_end = clock::now();
         std::chrono::duration<double> elapsed = t_end - t_start;
@@ -347,11 +362,19 @@ int main(int argc, char** argv){
     }else if (edge_importance_mode) {
         try {
             Dataset ds_new = Dataset::fromCSV(score_dataset_path);
+
+            const int D = ds_new.D;
+            const int N = ds_new.N;
+            const int* ds_new_x_ptr = ds_new.X_flat.data();
+            const int* ds_new_r_ptr = ds_new.r.data();
+            #pragma acc enter data copyin(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
+
             DAG g_base = loadInitEdges(ds_new.D, init_path);
             std::vector<Counts> C_loaded = loadAllCountsTSV(counts_in_path, ds_new.D);
 
             computeEdgeImportanceScores(ds_new, g_base, C_loaded, alpha_ij, ess, save_edge_importance_path);
 
+            #pragma acc exit data delete(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
             // --- 終了時間計測 ---
             auto t_end = clock::now();
             std::chrono::duration<double> elapsed = t_end - t_start;
@@ -368,6 +391,12 @@ int main(int argc, char** argv){
         try {
             // 1) 新データセットのロード（CSV/TSV自動判定・ヘッダあり）
             Dataset ds_new = Dataset::fromCSV(score_dataset_path);
+
+            const int D = ds_new.D;
+            const int N = ds_new.N;
+            const int* ds_new_x_ptr = ds_new.X_flat.data();
+            const int* ds_new_r_ptr = ds_new.r.data();
+            #pragma acc enter data copyin(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
 
             // 2) 構造（DAG）のロード（TSV/スペース; 既存の loadInitEdges を利用）
             if (init_path.empty())
@@ -399,6 +428,8 @@ int main(int argc, char** argv){
             std::cout << "log_likelihood_per_sample\t" << avgN << "\n";
             std::cout << "log_likelihood_per_variable\t" << avgND << "\n";
             std::cout << "alpha_ij\t" << alpha_ij << "\n";
+
+            #pragma acc exit data delete(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
             // --- 終了時間計測 ---
             auto t_end = clock::now();
             std::chrono::duration<double> elapsed = t_end - t_start;
@@ -413,6 +444,13 @@ int main(int argc, char** argv){
     // 単純な探索モード
     try{
         Dataset ds = Dataset::fromCSV(input_path);
+
+        const int D = ds.D;
+        const int N = ds.N;
+        const int* ds_x_ptr = ds.X_flat.data();
+        const int* ds_r_ptr = ds.r.data();
+        #pragma acc enter data copyin(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+
         DAG init = loadInitEdges(ds.D, init_path);
 
 
@@ -446,6 +484,7 @@ int main(int argc, char** argv){
             std::cout<<std::endl;
             }
         }
+
         // --- 終了時間計測 ---
         auto t_end_klist = clock::now();
         std::chrono::duration<double> elapsed_klist = t_end_klist - t_start_klist;
@@ -536,6 +575,7 @@ int main(int argc, char** argv){
                 return 2;
             }
         }
+        #pragma acc exit data delete(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
 
     } catch (const std::exception& e){
         std::cerr << "Error: " << e.what() << "\n";

@@ -8,6 +8,10 @@
 #include <memory>
 #include <filesystem>
 
+#ifdef __NVCOMPILER
+#include <openacc.h>
+#endif
+
 struct Scorer {
     const Dataset& ds;
     ScoreType type;
@@ -18,11 +22,16 @@ struct Scorer {
     // BIC: 対数尤度 - (d/2)*log(N), d=(r_i-1)*q_i
     double nodeScoreBIC(const Counts& c) const {
         double ll=0.0;
+        const long long* _nij  = c.n_ij.data();
+        const long long* _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
         for (int j=0;j<c.q_i;++j){
-            double nij=(double)c.n_ij[j];
+            double nij=(double)_nij[j];
             if (nij<=0) continue;
             for (int k=0;k<c.r_i;++k){
-                long long nijk=c.n_ijk[(size_t)j*c.r_i+k];
+                long long nijk=_nijk[(size_t)j*c.r_i+k];
                 if (nijk==0) continue;
                 ll += nijk * (log((double)nijk) - log(nij));
             }
@@ -35,11 +44,16 @@ struct Scorer {
     // K2: Dirichlet(1) 事前
     double nodeScoreK2(const Counts& c) const {
         double s=0.0;
+        const long long* _nij  = c.n_ij.data();
+        const long long* _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
         for (int j=0;j<c.q_i;++j){
-            double nij=(double)c.n_ij[j];
+            double nij=(double)_nij[j];
             s += lgamma((double)c.r_i) - lgamma(nij + (double)c.r_i);
             for (int k=0;k<c.r_i;++k){
-                double nijk=(double)c.n_ijk[(size_t)j*c.r_i + k];
+                double nijk=(double)_nijk[(size_t)j*c.r_i + k];
                 s += lgamma(nijk + 1.0); // - lgamma(1) = 0
             }
         }
@@ -51,11 +65,16 @@ struct Scorer {
         double s=0.0;
         double alpha_ij = ess / (double)std::max(1,c.q_i);
         double alpha_ijk = alpha_ij / (double)c.r_i;
+        const long long* _nij  = c.n_ij.data();
+        const long long* _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
         for (int j=0;j<c.q_i;++j){
-            double nij=(double)c.n_ij[j];
+            double nij=(double)_nij[j];
             s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
             for (int k=0;k<c.r_i;++k){
-                double nijk=(double)c.n_ijk[(size_t)j*c.r_i + k];
+                double nijk=(double)_nijk[(size_t)j*c.r_i + k];
                 s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
             }
         }
@@ -63,6 +82,7 @@ struct Scorer {
     }
 
     double nodeScore(const Counts& c) const {
+//        c.check_gpu("nodeScore");
         switch(type){
             case ScoreType::BIC: return nodeScoreBIC(c);
             case ScoreType::K2:  return nodeScoreK2(c);
@@ -117,11 +137,19 @@ struct JIndexCache {
         out.assign(N, 0);
         if (pa.empty()) return;
         std::vector<int> radix;
-        build_mixed_radix(pa, ds->r, radix);
+        build_mixed_radix(pa, *ds, radix);
+        const int P = (int)pa.size();
+        const int D = ds->D;
+        const int* pa_ptr = pa.data();
+        const int* ds_x_ptr = ds->X_flat.data();
+        int* rdx_ptr = radix.data();
+        int* out_ptr = out.data();
+        #pragma acc parallel loop
         for (int n=0;n<N;++n){
-            const int j = mixed_radix_index_row(*ds, n, pa, radix);
-            out[n]=j;
+            const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
+            out_ptr[n]=j;
         }
+        #pragma acc exit data delete(pa_ptr[0:P],rdx_ptr[0:P])
     }
 
     // 取得：キャッシュにあれば返す。無ければ構築してキャッシュ。
@@ -215,21 +243,37 @@ struct HillClimber {
     std::vector<Counts> nodeCounts;
     std::vector<double> nodeScoreNow;
     double totalNow = 0.0;
+    Counts tmpCounts_a = {
+      std::vector<long long>(4096),
+      std::vector<long long>(128),
+      128,
+      32
+    };
+    Counts tmpCounts_r = {
+      std::vector<long long>(4096),
+      std::vector<long long>(128),
+      128,
+      32
+    };
+
 
     HillClimber(const Dataset& ds, ScoreType t, double ess,
                 const DAG& init, Reachability::Mode rmode,
                 int jcache_cap)
         : ds(ds), scorer(ds,t,ess), g(init), reach(init, rmode), jcache(jcache_cap, &ds, &g)
     {
-        nodeCounts.resize(ds.D);
-        nodeScoreNow.resize(ds.D, 0.0);
+        nodeCounts.reserve(ds.D);
+        nodeScoreNow.reserve(ds.D);
 
         // 初期カウントを各ノードで構築（O(N·|Pa|) を D 回）
         for (int v=0; v<ds.D; ++v){
             auto Pa = g.parents(v);
-            nodeCounts[v] = computeCountsForNode_full(v, Pa, ds);
-            nodeScoreNow[v] = scorer.nodeScore(nodeCounts[v]);
+            std::vector<int> radix;
+            build_mixed_radix(Pa, ds, radix);
+            nodeCounts.emplace_back(computeCountsForNode_full(v, Pa, ds, radix));
+            nodeScoreNow.emplace_back(scorer.nodeScore(nodeCounts[v]));
             totalNow += nodeScoreNow[v];
+            nodeCounts[v].check_gpu();
         }
     }
 
@@ -272,51 +316,11 @@ struct HillClimber {
     // REMOVE(u->v): **完全インクリメンタル**
     // - 現在の counts（Pa(v)）から、削除対象 u の「桁」を落として合算するだけ（O(q·r_i)）
     // - データの再走査無し
-    double deltaRemove_andBuildNewCounts(int u, int v, Counts& newC) {
-        const Counts& curC = nodeCounts[v]; // Pa(v) に基づく現在の counts
-
-        // Pa(v) を取得して、u の位置（桁）と各基数を把握
-        std::vector<int> Pa = g.parents(v);
-        int pos = -1; std::vector<int> pa_r; pa_r.reserve(Pa.size());
-        for (int t=0; t<(int)Pa.size(); ++t){
-            pa_r.push_back(ds.r[Pa[t]]);
-            if (Pa[t]==u) pos=t;
-        }
-        if (pos<0) throw std::runtime_error("deltaRemove: u is not a parent of v (logic error).");
-
-        int r_u = ds.r[u];
-        int r_i = curC.r_i;
-        int q    = curC.q_i;
-        int q2   = q / r_u; // u の桁を落とすと親配置数は r_u 倍減る
-
-        // 右側（u より「下位桁」側）の基数の総乗
-        int right = 1;
-        for (int t=pos+1; t<(int)pa_r.size(); ++t) right *= pa_r[t];
-        int period = right * r_u; // 1つ上の繰り返し周期
-
-        newC.q_i = q2; newC.r_i = r_i;
-        newC.n_ij.assign(q2, 0);
-        newC.n_ijk.assign((size_t)q2*r_i, 0);
-
-        // 旧インデックス j を新インデックス j' へ写像して合算
-        // j' = floor(j / period) * right + (j % right)
-        for (int j=0; j<q; ++j){
-            int jp = (j / period) * right + (j % right);
-            newC.n_ij[jp] += curC.n_ij[j];
-            size_t base_old = (size_t)j * r_i;
-            size_t base_new = (size_t)jp * r_i;
-            for (int k=0;k<r_i;++k){
-                newC.n_ijk[base_new + k] += curC.n_ijk[base_old + k];
-            }
-        }
-
-        double after = scorer.nodeScore(newC);
-        return after - nodeScoreNow[v];
-    }
+    double deltaRemove_andBuildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC);
 
     // REVERSE(u->v): v 側は REMOVE（マージ）、u 側は ADD（分割）
-    double deltaReverse_buildNewCounts(int u, int v, Counts& newC_v, Counts& newC_u, double& d_v, double& d_u){
-        d_v = deltaRemove_andBuildNewCounts(u, v, newC_v); // v: 親 u を外す（マージ）
+    double deltaReverse_buildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC_v, Counts& newC_u, double& d_v, double& d_u){
+        d_v = deltaRemove_andBuildNewCounts(u, v, Pa, newC_v); // v: 親 u を外す（マージ）
         d_u = deltaAdd_andBuildNewCounts(v, u, newC_u);    // u: 親に v を加える（分割）
         return d_v + d_u;
     }
@@ -330,6 +334,9 @@ struct HillClimber {
         if (verbose) std::cerr << std::fixed << std::setprecision(6)
                           << "[start] score="<<cur<<" edges="<<g.edges().size()
                           << " mode="<<(use_tabu?"tabu":"greedy")<<"\n";
+
+        tmpCounts_a.check_gpu("run a");
+        tmpCounts_r.check_gpu("run r");
 
         const int D = ds.D;
         // タブー配列（属性タブー：直近操作の巻き戻しを禁止）
@@ -366,13 +373,14 @@ struct HillClimber {
             Move bestNonTabu; bestNonTabu.type=Move::NONE; bestNonTabu.delta=-1e300;
 
             // 近傍列挙（ADD は候補親 K のみ、REMOVE/REVERSE は現辺）
+            // Counts _newC,_newCu,_newCv;
             for (int v=0; v<D; ++v){
                 // --- ADD 候補 ---
                 if (topK>0){
                     for (int u: candParents[v]){
                         if (!addAllowed(u,v)) continue;
-                        Counts newC;
-                        double d = deltaAdd_andBuildNewCounts(u, v, newC);
+//                        Counts newC;
+                        double d = deltaAdd_andBuildNewCounts(u, v, tmpCounts_a);
                         Move mv{Move::ADD,u,v,d};
                         bool tabu = isTabu(mv, it);
                         bool asp = (cur + d > bestScore + 1e-12); // アスピレーション
@@ -382,8 +390,8 @@ struct HillClimber {
                 } else {
                     for (int u=0; u<D; ++u) if (u!=v){
                         if (!addAllowed(u,v)) continue;
-                        Counts newC;
-                        double d = deltaAdd_andBuildNewCounts(u, v, newC);
+//                        Counts newC;
+                        double d = deltaAdd_andBuildNewCounts(u, v, tmpCounts_a);
                         Move mv{Move::ADD,u,v,d};
                         bool tabu = isTabu(mv, it);
                         bool asp = (cur + d > bestScore + 1e-12);
@@ -393,9 +401,10 @@ struct HillClimber {
                 }
 
                 // --- REMOVE 候補（現にある辺）---
+                std::vector<int> Pa = g.parents(v);
                 for (int u=0; u<D; ++u) if (g.adj[u][v]){
-                    Counts newC;
-                    double d = deltaRemove_andBuildNewCounts(u, v, newC);
+//                    Counts newC;
+                    double d = deltaRemove_andBuildNewCounts(u, v, Pa, tmpCounts_r);
                     Move mv{Move::REMOVE,u,v,d};
                     bool tabu = isTabu(mv, it);
                     bool asp = (cur + d > bestScore + 1e-12);
@@ -404,10 +413,13 @@ struct HillClimber {
                 }
 
                 // --- REVERSE 候補（現にある辺で逆向き追加が可能なもの）---
+
                 for (int u=0; u<D; ++u) if (g.adj[u][v]){
                     if (!reverseAllowed(u,v)) continue;
-                    Counts newCv, newCu; double dv=0.0, du=0.0;
-                    double d = deltaReverse_buildNewCounts(u, v, newCv, newCu, dv, du);
+//                    Counts newCv, newCu;
+                    double dv = deltaRemove_andBuildNewCounts(u, v, Pa, tmpCounts_r); // v: 親 u を外す（マージ）
+                    double du = deltaAdd_andBuildNewCounts(v, u, tmpCounts_a);    // u: 親に v を加える（分割）
+                    double d = du + dv;
                     Move mv{Move::REVERSE,u,v,d};
                     bool tabu = isTabu(mv, it);
                     bool asp = (cur + d > bestScore + 1e-12);
@@ -426,31 +438,54 @@ struct HillClimber {
 
             // ===== 実適用（DAG / reach / j_index / counts / scores を整合させる） =====
             if (chosen.type==Move::ADD){
-                Counts newC; double d = deltaAdd_andBuildNewCounts(chosen.u, chosen.v, newC);
+                double d = deltaAdd_andBuildNewCounts(chosen.u, chosen.v, tmpCounts_a);
+                tmpCounts_a.check_gpu("run ADD");
                 g.addEdge(chosen.u, chosen.v);
                 reach.onAddEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.v});          // v の親が変わったので j_index[v] を無効化
-                nodeCounts[chosen.v] = std::move(newC);            // v の counts を差し替え
+                std::cout << "ADD (q,r) " <<
+                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
+                    "(" << tmpCounts_a.q_i << "," << tmpCounts_a.r_i << ")" << std::endl;
+                nodeCounts[chosen.v] = tmpCounts_a;            // v の counts を差し替え
+                nodeCounts[chosen.v].check_gpu("run ADD commit");
                 nodeScoreNow[chosen.v] += d;                  // v のスコアだけ増分更新
                 totalNow += d;                                 // 全体スコア更新
 
             } else if (chosen.type==Move::REMOVE){
-                Counts newC; double d = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, newC);
+                std::vector<int> Pa = g.parents(chosen.v);
+                double d = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r);
+                tmpCounts_r.check_gpu("run REMOVE");
                 g.removeEdge(chosen.u, chosen.v);
                 reach.onRemoveEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.v});
-                nodeCounts[chosen.v] = std::move(newC);
+                std::cout << "REMOVE (q,r) " <<
+                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
+                    "(" << tmpCounts_r.q_i << "," << tmpCounts_r.r_i << ")" << std::endl;
+                nodeCounts[chosen.v] = tmpCounts_r;
+                nodeCounts[chosen.v].check_gpu("run REMOVE commit");
                 nodeScoreNow[chosen.v] += d;
                 totalNow += d;
 
             } else if (chosen.type==Move::REVERSE){
-                Counts newCv, newCu; double dv=0.0, du=0.0;
-                double d = deltaReverse_buildNewCounts(chosen.u, chosen.v, newCv, newCu, dv, du);
+                std::vector<int> Pa = g.parents(chosen.v);
+                double dv = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r); // v: 親 u を外す（マージ）
+                double du = deltaAdd_andBuildNewCounts(chosen.v, chosen.u, tmpCounts_a);    // u: 親に v を加える（分割）
+                tmpCounts_a.check_gpu("run REVERSE");
+                tmpCounts_r.check_gpu("run REVERSE");
+                double d = du + dv;
                 g.reverseEdge(chosen.u, chosen.v);
                 reach.onReverseEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.u, chosen.v});
-                nodeCounts[chosen.v] = std::move(newCv);
-                nodeCounts[chosen.u] = std::move(newCu);
+                std::cout << "REVERSE (q,r) " <<
+                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
+                    "(" << tmpCounts_r.q_i << "," << tmpCounts_r.r_i << ")" << std::endl;
+                std::cout << "REVERSE (q,r) " <<
+                    "(" << nodeCounts[chosen.u].q_i << "," << nodeCounts[chosen.u].r_i << ") => " <<
+                    "(" << tmpCounts_a.q_i << "," << tmpCounts_a.r_i << ")" << std::endl;
+                nodeCounts[chosen.v] = tmpCounts_r;
+                nodeCounts[chosen.u] = tmpCounts_a;
+                nodeCounts[chosen.v].check_gpu("run REVERSE commit");
+                nodeCounts[chosen.u].check_gpu("run REVERSE commit");
                 nodeScoreNow[chosen.v] += dv;
                 nodeScoreNow[chosen.u] += du;
                 totalNow += d;
@@ -561,7 +596,9 @@ inline void saveAllCountsTSV(const std::string& path, const Dataset& ds, const D
         fout << "\n# child_cardinality\t" << ds.r[v] << "\n";
 
         // 再度カウント（q_i は親配置数）
-        Counts C = computeCountsForNode_full(v, pa, ds);
+        std::vector<int> radix;
+        build_mixed_radix(pa, ds, radix);
+        Counts C = computeCountsForNode_full(v, pa, ds, radix);
         const int r_i = C.r_i;         // 子の取りうる値の数
         int q_i = C.q_i;               // 親配置数
         if (pa.empty()) q_i = 1;       // 念のため明示
@@ -586,6 +623,7 @@ inline void saveAllCountsTSV(const std::string& path, const Dataset& ds, const D
 // all_counts.tsv（単一ファイル）から、各ノード v の Counts を復元する。
 // フォーマット：データ行 "v \t j \t k \t n" （k='*' のとき n_ij）
 static std::vector<Counts> loadAllCountsTSV(const std::string& path, int expected_D, std::vector<int>* out_child_r = nullptr) {
+    std::cout << "loadAllCountsTSV " << path << std::endl;
     std::ifstream fin(path);
     if (!fin) throw std::runtime_error("Failed to open all-counts file: " + path);
 
@@ -667,6 +705,7 @@ static std::vector<Counts> loadAllCountsTSV(const std::string& path, int expecte
     }
 
     if (out_child_r) *out_child_r = std::move(child_r_detected);
+    std::cout << "complete loadAllCountsTSV" << std::endl;
     return C;
 }
 
@@ -754,11 +793,18 @@ static std::vector<int> buildJIndexForParents(const Dataset& ds,
     if (parents.empty()) return jidx;
     // 右端の親が最下位桁になる混合基数
     std::vector<int> radix;
-    build_mixed_radix(parents, ds.r, radix);
+    build_mixed_radix(parents, ds, radix);
+    const int P = (int)parents.size();
+    const int D = ds.D;
+    const int* ds_x_ptr = ds.X_flat.data();
+    const int* pa_ptr = parents.data();
+    const int* rdx_ptr = radix.data();
+    #pragma acc parallel loop
     for (int n=0; n<ds.N; ++n) {
-        const int j = mixed_radix_index_row(ds, n, parents, radix);
+        const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
         jidx[n]=j;
     }
+    #pragma acc exit data delete(pa_ptr[0:P],rdx_ptr[0:P])
     return jidx;
 }
 
@@ -789,136 +835,13 @@ DeltaStats perSampleDeltaLogLStats(const Dataset& ds_new,
 //   3. そのノード v のみ再スコア（親集合からuを除く）
 //   4. 各スコア差 Δ = (after - before) を出力
 // ============================================================
-inline void computeEdgeImportanceScores(const Dataset& ds_new,
+void computeEdgeImportanceScores(const Dataset& ds_new,
                                  const DAG& g_base,
                                  const std::vector<Counts>& counts,
                                  double alpha_ij,
                                  double ess,
-                                 const std::string& outfile)
-{
-    std::ofstream fout(outfile);
-    if (!fout) throw std::runtime_error("Failed to open edge-importance file: " + outfile);
-    fout << "u\tv\tΔlogL\tΔBIC\tΔK2\tΔBDeu\n";
+                                 const std::string& outfile);
 
-    const int D = ds_new.D;
-    const int N = ds_new.N;
-    const double logN = std::log((double)std::max(1, N));
-
-    // ========== スコア計算関数群 ==========
-    auto nodeLogLikelihood = [&](int v, const DAG& g) -> double {
-        const auto pa = g.parents(v);
-        Counts C = computeCountsForNode_full(v, pa, ds_new);
-        double ll = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            if (nij <= 0) continue;
-            for (int k = 0; k < C.r_i; ++k) {
-                long long nijk = C.n_ijk[j*C.r_i + k];
-                if (nijk == 0) continue;
-                ll += nijk * (std::log((double)nijk) - std::log(nij));
-            }
-        }
-        return ll;
-    };
-
-    auto nodeBIC = [&](int v, const DAG& g) -> double {
-        const auto pa = g.parents(v);
-        Counts C = computeCountsForNode_full(v, pa, ds_new);
-        double ll = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            if (nij <= 0) continue;
-            for (int k = 0; k < C.r_i; ++k) {
-                long long nijk = C.n_ijk[j*C.r_i + k];
-                if (nijk == 0) continue;
-                ll += nijk * (std::log((double)nijk) - std::log(nij));
-            }
-        }
-        int d = (C.r_i - 1) * C.q_i;
-        double pen = 0.5 * d * logN;
-        return ll - pen;
-    };
-
-    auto nodeK2 = [&](int v, const DAG& g) -> double {
-        const auto pa = g.parents(v);
-        Counts C = computeCountsForNode_full(v, pa, ds_new);
-        double s = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            s += std::lgamma((double)C.r_i) - std::lgamma(nij + (double)C.r_i);
-            for (int k = 0; k < C.r_i; ++k) {
-                double nijk = (double)C.n_ijk[j*C.r_i + k];
-                s += std::lgamma(nijk + 1.0);
-            }
-        }
-        return s;
-    };
-
-    auto nodeBDeu = [&](int v, const DAG& g) -> double {
-        const auto pa = g.parents(v);
-        Counts C = computeCountsForNode_full(v, pa, ds_new);
-        double s = 0.0;
-        if (C.q_i == 0) return -INFINITY;
-        double alpha_ij_local = ess / (double)C.q_i;
-        double alpha_ijk_base = alpha_ij_local / (double)C.r_i;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            s += std::lgamma(alpha_ij_local) - std::lgamma(nij + alpha_ij_local);
-            for (int k = 0; k < C.r_i; ++k) {
-                double nijk = (double)C.n_ijk[j*C.r_i + k];
-                s += std::lgamma(nijk + alpha_ijk_base) - std::lgamma(alpha_ijk_base);
-            }
-        }
-        return s;
-    };
-
-    // ========== 元スコア計算 ==========
-    double baseLL = 0.0, baseBIC = 0.0, baseK2 = 0.0, baseBDeu = 0.0;
-    for (int v = 0; v < D; ++v) {
-        baseLL  += nodeLogLikelihood(v, g_base);
-        baseBIC += nodeBIC(v, g_base);
-        baseK2  += nodeK2(v, g_base);
-        baseBDeu+= nodeBDeu(v, g_base);
-    }
-
-    // ========== 各エッジ削除時のスコア差 ==========
-    for (int u = 0; u < D; ++u) {
-        for (int v = 0; v < D; ++v) {
-            if (!g_base.hasEdge(u, v)) continue;
-
-            DAG g_mod = g_base;
-            g_mod.removeEdge(u, v);
-
-            // 対象ノード v のみ再スコア
-            double ll_new   = nodeLogLikelihood(v, g_mod);
-            double bic_new  = nodeBIC(v, g_mod);
-            double k2_new   = nodeK2(v, g_mod);
-            double bdeu_new = nodeBDeu(v, g_mod);
-
-            // 元スコアとの差分（Δ）
-            double deltaLL   = ll_new   - nodeLogLikelihood(v, g_base);
-            double deltaBIC  = bic_new  - nodeBIC(v, g_base);
-            double deltaK2   = k2_new   - nodeK2(v, g_base);
-            double deltaBDeu = bdeu_new - nodeBDeu(v, g_base);
-
-            auto pa_before = g_base.parents(v);
-            std::vector<int> pa_after; pa_after.reserve(pa_before.size());
-            for (int p : pa_before) if (p!=u) pa_after.push_back(p);
-            DeltaStats st = perSampleDeltaLogLStats(ds_new, v, pa_before, pa_after, alpha_ij);
-
-            fout << u << "\t" << v << "\t"
-                 << deltaLL   << "\t"
-                 << deltaBIC  << "\t"
-                 << deltaK2   << "\t"
-                 << deltaBDeu << "\t"
-                 << std::setprecision(12) << st.mean << '\t'
-                 << std::setprecision(12) << st.stdev << '\n';
-        }
-    }
-
-    fout.close();
-    std::cerr << "[info] wrote edge importance results to " << outfile << "\n";
-}
 // ================================================================
 // ブートストラップ学習を B 回まわして、エッジ出現回数を TSV で保存
 //
@@ -933,7 +856,7 @@ inline void computeEdgeImportanceScores(const Dataset& ds_new,
 //
 // 注意: メモリ節約のためカウントは unordered_map で疎管理
 // ================================================================
-inline void runBootstrapStructureCounts(const Dataset& ds,
+void runBootstrapStructureCounts(const Dataset& ds,
                                  ScoreType score_type,
                                  double ess_for_bdeu,
                                  const std::string& init_path,
@@ -951,101 +874,5 @@ inline void runBootstrapStructureCounts(const Dataset& ds,
                                  int jindex_cache_cap,
                                  int B,            // ブートストラップ反復回数
                                  uint64_t seed,
-                                 const std::string& save_path)
-{
-    if (B <= 0) throw std::runtime_error("bootstrap B must be > 0");
-    std::mt19937_64 rng(seed);
-
-    // 疎カウント：エッジ (u->v) の出現回数
-    std::unordered_map<uint64_t, uint32_t> edge_counts;
-    edge_counts.reserve((size_t)ds.D * 8); // 適当に初期予約（出現が疎な想定）
-
-    for (int b = 0; b < B; ++b) {
-        // 1) ブートストラップ標本の生成
-        Dataset ds_b = bootstrapResampleDataset(ds, rng);
-
-        // 2) 初期構造のロード
-        DAG init = loadInitEdges(ds_b.D, init_path);
-
-        // 3) 候補親Kの前処理（サンプル/バジェットは引数で制御）
-        std::vector<std::vector<int>> topKlist;
-        if (topK >0 || mi_threshold>0.0 || chi2_p_threshold<1.0){
-            std::vector<int> rows;
-            if (mi_sample > 0 && mi_sample < ds_b.N) {
-                rows.resize(ds_b.N); iota(rows.begin(), rows.end(), 0);
-                shuffle(rows.begin(), rows.end(), rng);
-                rows.resize(mi_sample);
-                std::sort(rows.begin(), rows.end());
-            } else {
-                rows.resize(ds_b.N); iota(rows.begin(), rows.end(), 0);
-            }
-            int budget = (mi_budget > 0 ? mi_budget : (ds_b.D - 1));
-            //topKlist = MICandidates::compute(ds_b, topK, budget, rows, rng, mi_threshold);
-            topKlist = AssocCandidates::compute(
-                ds, topK, budget, rows, rng, cand_metric, mi_threshold, chi2_p_threshold
-            );
-        }
-        
-        // 4) 探索器の構築 & 実行（学習本体）
-        HillClimber hc(ds_b, score_type, ess_for_bdeu, init, reach_mode, jindex_cache_cap);
-        hc.max_iter = iters;
-        hc.tabu_tenure = tabu_tenure;
-        hc.max_parents = max_parents;
-        hc.max_children = max_children;
-        if (topK > 0) { hc.candParents = std::move(topKlist); hc.topK = topK; }
-        hc.verbose = false; // ブートストラップ時は静かに
-
-        auto [g_learned, score, it] = hc.run(/*use_tabu=*/(tabu_tenure > 0));
-
-        // 5) 出現エッジを蓄積
-        for (auto &e : g_learned.edges()) {
-            uint64_t key = edgeKeyUV((uint32_t)e.first, (uint32_t)e.second);
-            auto it = edge_counts.find(key);
-            if (it == edge_counts.end()) edge_counts.emplace(key, 1u);
-            else ++(it->second);
-        }
-
-        // 進捗表示（必要なら）
-        if ( (b % 10) == 0 ) {
-            std::cerr << "[bootstrap] " << (b+1) << "/" << B
-                      << " edges_seen=" << edge_counts.size() << "\n";
-        }
-    }
-
-    // 6) 出力：TSV（u, v, count, prob）
-    //    include_zero_edges が true なら（u!=v）の全組み合わせで 0 も出力（巨大Dでは注意）
-    namespace fs = std::filesystem;
-    fs::path base_path(save_path);
-    std::string stem = base_path.stem().string();   // 例: "boot_edges"
-    std::string ext  = base_path.extension().string(); // 例: ".tsv"
-    fs::path parent  = base_path.parent_path();
-
-    std::ostringstream seed_str;
-    seed_str << std::setfill('0') << std::setw(4) << (seed % 10000);
-    // ファイル名: <stem>_seed<seed><ext>
-    std::ostringstream oss;
-    oss << stem << "_seed" << seed_str.str() << ext;
-    fs::path out_path = parent / oss.str();
-
-    std::ofstream fout(out_path);
-
-    if (!fout) throw std::runtime_error("Failed to open --save-bootstrap-counts: " + save_path);
-
-    fout << "u\tv\tcount\tprob\n";
-
-    // 出現したエッジのみ
-    // キーを (u,v) に分解して出力
-    for (auto &kv : edge_counts) {
-        uint64_t key = kv.first;
-        uint32_t c = kv.second;
-        uint32_t u = (uint32_t)(key >> 32);
-        uint32_t v = (uint32_t)(key & 0xffffffffULL);
-        double p = (double)c / (double)B;
-        fout << u << "\t" << v << "\t" << c << "\t" << std::setprecision(12) << p << "\n";
-    }
-
-    fout.close();
-    std::cerr << "[info] wrote bootstrap edge counts to " << save_path
-              << " (B=" << B << ", unique_edges=" << edge_counts.size() << ")\n";
-}
+                                 const std::string& save_path);
 
