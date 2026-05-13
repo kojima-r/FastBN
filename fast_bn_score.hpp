@@ -12,6 +12,8 @@
 #include <openacc.h>
 #endif
 
+#include "fast_bn_counts.hpp"
+
 struct Scorer {
     const Dataset& ds;
     ScoreType type;
@@ -26,14 +28,17 @@ struct Scorer {
         const long long* _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
-        for (int j=0;j<c.q_i;++j){
-            double nij=(double)_nij[j];
-            if (nij<=0) continue;
-            for (int k=0;k<c.r_i;++k){
-                long long nijk=_nijk[(size_t)j*c.r_i+k];
-                if (nijk==0) continue;
-                ll += nijk * (log((double)nijk) - log(nij));
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                if (nij<=0) continue;
+                for (int k=0;k<r_i;++k){
+                    long long nijk=_nijk[(size_t)j*r_i+k];
+                    if (nijk==0) continue;
+                    ll += nijk * (log((double)nijk) - log(nij));
+                }
             }
         }
         int d=(c.r_i-1)*c.q_i;
@@ -48,13 +53,16 @@ struct Scorer {
         const long long* _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
-        for (int j=0;j<c.q_i;++j){
-            double nij=(double)_nij[j];
-            s += lgamma((double)c.r_i) - lgamma(nij + (double)c.r_i);
-            for (int k=0;k<c.r_i;++k){
-                double nijk=(double)_nijk[(size_t)j*c.r_i + k];
-                s += lgamma(nijk + 1.0); // - lgamma(1) = 0
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                s += lgamma((double)r_i) - lgamma(nij + (double)r_i);
+                for (int k=0;k<r_i;++k){
+                    double nijk=(double)_nijk[(size_t)j*r_i + k];
+                    s += lgamma(nijk + 1.0); // - lgamma(1) = 0
+                }
             }
         }
         return s;
@@ -69,13 +77,16 @@ struct Scorer {
         const long long* _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc kernels copy(_nij[0:q_i],_nijk[0:q_i*r_i])
-        for (int j=0;j<c.q_i;++j){
-            double nij=(double)_nij[j];
-            s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
-            for (int k=0;k<c.r_i;++k){
-                double nijk=(double)_nijk[(size_t)j*c.r_i + k];
-                s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
+                for (int k=0;k<r_i;++k){
+                    double nijk=(double)_nijk[(size_t)j*r_i + k];
+                    s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
+                }
             }
         }
         return s;
@@ -144,12 +155,14 @@ struct JIndexCache {
         const int* ds_x_ptr = ds->X_flat.data();
         int* rdx_ptr = radix.data();
         int* out_ptr = out.data();
-        #pragma acc parallel loop
-        for (int n=0;n<N;++n){
-            const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
-            out_ptr[n]=j;
+        #pragma acc data present(ds_x_ptr[0:N*D])
+        {
+            #pragma acc parallel loop present(ds_x_ptr[0:N*D]) copy(pa_ptr[0:P],rdx_ptr[0:P])
+            for (int n=0;n<N;++n){
+                const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
+                out_ptr[n]=j;
+            }
         }
-        #pragma acc exit data delete(pa_ptr[0:P],rdx_ptr[0:P])
     }
 
     // 取得：キャッシュにあれば返す。無ければ構築してキャッシュ。
@@ -796,15 +809,18 @@ static std::vector<int> buildJIndexForParents(const Dataset& ds,
     build_mixed_radix(parents, ds, radix);
     const int P = (int)parents.size();
     const int D = ds.D;
+    const int N = ds.N;
     const int* ds_x_ptr = ds.X_flat.data();
     const int* pa_ptr = parents.data();
     const int* rdx_ptr = radix.data();
-    #pragma acc parallel loop
-    for (int n=0; n<ds.N; ++n) {
-        const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
-        jidx[n]=j;
+    #pragma acc data present(ds_x_ptr[0:N*D])
+    {
+        #pragma acc parallel present(ds_x_ptr[0:N*D]) loop copy(pa_ptr[0:P],rdx_ptr[0:P])
+        for (int n=0; n<N; ++n) {
+            const int j = mixed_radix_index_row(D, ds_x_ptr, n, P, pa_ptr, rdx_ptr);
+            jidx[n]=j;
+        }
     }
-    #pragma acc exit data delete(pa_ptr[0:P],rdx_ptr[0:P])
     return jidx;
 }
 

@@ -227,12 +227,12 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
 
     if (curC.q_i == 0)
     {
-        #pragma acc data copy(ds_x_ptr[0:N*D]) present(nij[0:qp],nijk[0:qp*r_i])
+        #pragma acc data present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
         {
             // 親なしの場合は j_index を呼ばない
 
             // 各サンプルについて j' と k を1回で決めてカウント
-            #pragma acc parallel loop
+            #pragma acc parallel loop present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
             for (int n = 0; n < N; ++n) {
                 const int xu = ds_x_ptr[(size_t)n * D + u]; // ds.x(n, u);   // フラット配列アクセス
                 const int k  = ds_x_ptr[(size_t)n * D + v]; // ds.x(n, v);
@@ -250,7 +250,7 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
         // 親ありの場合
         const int* __restrict jptr = jcache.get(v).data(); // Pa(v) に対応する j_index（キャッシュから取得）
 
-        #pragma acc data copy(ds_x_ptr[0:N*D]) present(nij[0:qp],nijk[0:qp*r_i]) copyin(jptr[0:N])
+        #pragma acc data present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i]) copyin(jptr[0:N])
         {
             // 各サンプルについて j' と k を1回で決めてカウント
             #pragma acc parallel loop
@@ -303,6 +303,8 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
 
     // 旧インデックス j を新インデックス j' へ写像して合算
     // j' = floor(j / period) * right + (j % right)
+    #pragma acc data present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
+    {
     #pragma acc kernels present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
     for (int j=0; j<q; ++j){
         int jp = (j / period) * right + (j % right);
@@ -312,6 +314,7 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
         for (int k=0;k<r_i;++k){
             new_nijk[base_new + k] += cur_nijk[base_old + k];
         }
+    }
     }
     newC.acc_update_host();
 
@@ -428,13 +431,23 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
     // ========== スコア計算関数群 ==========
     auto nodeLogLikelihood = [&](const Counts &C) -> double {
         double ll = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            if (nij <= 0) continue;
-            for (int k = 0; k < C.r_i; ++k) {
-                long long nijk = C.n_ijk[j*C.r_i + k];
-                if (nijk == 0) continue;
-                ll += nijk * (std::log((double)nijk) - std::log(nij));
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            for (int j = 0; j < q_i; ++j) {
+                for (int k = 0; k < r_i; ++k) {
+                    double nij = (double)_nij[j];
+                    if (nij > 0){
+                        long long nijk = _nijk[j*r_i + k];
+                        if (nijk > 0){
+                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                        }
+                    }
+                }
             }
         }
         return ll;
@@ -442,13 +455,23 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
 
     auto nodeBIC = [&](const Counts &C) -> double {
         double ll = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            if (nij <= 0) continue;
-            for (int k = 0; k < C.r_i; ++k) {
-                long long nijk = C.n_ijk[j*C.r_i + k];
-                if (nijk == 0) continue;
-                ll += nijk * (std::log((double)nijk) - std::log(nij));
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            for (int j = 0; j < q_i; ++j) {
+                for (int k = 0; k < r_i; ++k) {
+                    double nij = (double)_nij[j];
+                    if (nij > 0){
+                        long long nijk = _nijk[j*r_i + k];
+                        if (nijk > 0){
+                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                        }
+                    }
+                }
             }
         }
         int d = (C.r_i - 1) * C.q_i;
@@ -458,12 +481,20 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
 
     auto nodeK2 = [&](const Counts &C) -> double {
         double s = 0.0;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            s += std::lgamma((double)C.r_i) - std::lgamma(nij + (double)C.r_i);
-            for (int k = 0; k < C.r_i; ++k) {
-                double nijk = (double)C.n_ijk[j*C.r_i + k];
-                s += std::lgamma(nijk + 1.0);
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+            #pragma acc parallel loop reduction(+:s)
+            for (int j = 0; j < q_i; ++j) {
+                double nij = (double)_nij[j];
+                s += std::lgamma((double)r_i) - std::lgamma(nij + (double)r_i);
+                for (int k = 0; k < r_i; ++k) {
+                    double nijk = (double)_nijk[j*r_i + k];
+                    s += std::lgamma(nijk + 1.0);
+                }
             }
         }
         return s;
@@ -474,12 +505,20 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         if (C.q_i == 0) return -INFINITY;
         double alpha_ij_local = ess / (double)C.q_i;
         double alpha_ijk_base = alpha_ij_local / (double)C.r_i;
-        for (int j = 0; j < C.q_i; ++j) {
-            double nij = (double)C.n_ij[j];
-            s += std::lgamma(alpha_ij_local) - std::lgamma(nij + alpha_ij_local);
-            for (int k = 0; k < C.r_i; ++k) {
-                double nijk = (double)C.n_ijk[j*C.r_i + k];
-                s += std::lgamma(nijk + alpha_ijk_base) - std::lgamma(alpha_ijk_base);
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            for (int j = 0; j < C.q_i; ++j) {
+                double nij = (double)C.n_ij[j];
+                s += std::lgamma(alpha_ij_local) - std::lgamma(nij + alpha_ij_local);
+                for (int k = 0; k < C.r_i; ++k) {
+                    double nijk = (double)C.n_ijk[j*C.r_i + k];
+                    s += std::lgamma(nijk + alpha_ijk_base) - std::lgamma(alpha_ijk_base);
+                }
             }
         }
         return s;
@@ -611,6 +650,7 @@ void runBootstrapStructureCounts(const Dataset& ds,
         const int N = ds_b.N;
         const int* ds_b_x_ptr = ds_b.X_flat.data();
         const int* ds_b_r_ptr = ds_b.r.data();
+        std::cout << "Dataset copyin " << N << " " << D << std::endl;
         #pragma acc enter data copyin(ds_b_x_ptr[0:N*D],ds_b_r_ptr[0:D])
 
 
@@ -661,6 +701,7 @@ void runBootstrapStructureCounts(const Dataset& ds,
                       << " edges_seen=" << edge_counts.size() << "\n";
         }
 
+        std::cout << "Dataset delete " << N << " " << D << std::endl;
         #pragma acc exit data delete(ds_b_x_ptr[0:N*D],ds_b_r_ptr[0:D])
     }
 

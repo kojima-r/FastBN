@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export NV_ACC_TIME=1
+export NVCOMPILER_ACC_DEBUG=1
 
 bin=../fast_bn
 output=./`date +%Y%m%d_%H%M%S`_01_tri

@@ -3,6 +3,8 @@
 # -DCMAKE_C_COMPILER=nvc -DCMAKE_CXX_COMPILER=nvc++
 # で行う
 #
+# CUDA のバージョンを環境変数 CUDA_VERSION に記述する（例：12.6, 12.9, 13.1）
+#
 cmake_minimum_required(VERSION 3.10)
 
 project(FastBN_GPU)
@@ -15,7 +17,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_executable(fast_bn
         fast_bn_main.cpp
         fast_bn_score.cpp
-        fast_bn_dag.cpp
+        fast_bn_counts.cpp
     )
     target_compile_options(fast_bn PRIVATE 
         -O3
@@ -25,7 +27,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
     add_executable(fast_bn
         fast_bn_main.cpp
         fast_bn_score.cpp
-        fast_bn_dag.cpp
+        fast_bn_counts.cpp
     )
     if(OpenACC_CXX_FOUND)
         target_link_libraries(fast_bn PRIVATE OpenACC::OpenACC_CXX)

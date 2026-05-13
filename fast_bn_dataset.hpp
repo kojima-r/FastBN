@@ -48,6 +48,22 @@ struct Dataset {
     inline int x(int n, int d) const noexcept {
         return X_flat[(size_t)n * D + d];
     }
+    ~Dataset(){
+        int* ds_x_ptr = X_flat.data();
+        int* ds_r_ptr = r.data();
+    }
+    void acc_copyin(void){
+        const int* ds_x_ptr = X_flat.data();
+        const int* ds_r_ptr = r.data();
+        std::cout << "Dataset copyin " << N << " " << D << std::endl;
+        #pragma acc enter data copyin(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+    }
+    void acc_delete(void){
+        const int* ds_x_ptr = X_flat.data();
+        const int* ds_r_ptr = r.data();
+        std::cout << "Dataset delete " << N << " " << D << std::endl;
+        #pragma acc exit data delete(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+    }
     // CSV または TSV を読み込み（区切り文字を自動判定）
     static Dataset fromCSV(const std::string& path) {
         std::ifstream fin(path);

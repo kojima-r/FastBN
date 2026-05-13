@@ -2100,7 +2100,7 @@ int main(int argc, char** argv){
           ds, sc, ess, init_path,
           tabu_tenure, iters,
           max_parents, max_children,
-	  cand_metric,
+          cand_metric,
           K, mi_sample, mi_budget, mi_threshold, chi2_p_threshold,
           (reach_mode_str=="dense"? Reachability::DENSE : Reachability::LAZY),
           jindex_cache_cap,
@@ -2191,7 +2191,7 @@ int main(int argc, char** argv){
         auto t_start_klist = clock::now();
         if (K>0 || mi_threshold>0.0 || chi2_p_threshold<1.0){
             mt19937_64 rng(seed);
-	    // 行サンプルを作る（mi_sample==0 なら全行）
+            // 行サンプルを作る（mi_sample==0 なら全行）
             vector<int> rows;
             if (mi_sample>0 && mi_sample < ds.N){
                 rows.resize(ds.N); iota(rows.begin(), rows.end(), 0);

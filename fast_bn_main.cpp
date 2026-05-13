@@ -332,12 +332,7 @@ int main(int argc, char** argv){
         }
         // 入力データ（CSV/TSV・ヘッダあり）
         Dataset ds = Dataset::fromCSV(input_path);
-
-        const int D = ds.D;
-        const int N = ds.N;
-        const int* ds_x_ptr = ds.X_flat.data();
-        const int* ds_r_ptr = ds.r.data();
-        #pragma acc enter data copyin(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+        ds.acc_copyin();
 
         // 既存のオプション（score, ess, init, tabu, iters, max-parents/children, topK, mi_sample, mi_budget, reach_mode, jindex_cache_cap）
         runBootstrapStructureCounts(
@@ -351,7 +346,7 @@ int main(int argc, char** argv){
           bootstrap_B, seed,
           save_bootstrap_counts
         );
-        #pragma acc exit data delete(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+        ds.acc_delete();
         // --- 終了時間計測 ---
         auto t_end = clock::now();
         std::chrono::duration<double> elapsed = t_end - t_start;
@@ -362,19 +357,14 @@ int main(int argc, char** argv){
     }else if (edge_importance_mode) {
         try {
             Dataset ds_new = Dataset::fromCSV(score_dataset_path);
-
-            const int D = ds_new.D;
-            const int N = ds_new.N;
-            const int* ds_new_x_ptr = ds_new.X_flat.data();
-            const int* ds_new_r_ptr = ds_new.r.data();
-            #pragma acc enter data copyin(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
+            ds_new.acc_copyin();
 
             DAG g_base = loadInitEdges(ds_new.D, init_path);
             std::vector<Counts> C_loaded = loadAllCountsTSV(counts_in_path, ds_new.D);
 
             computeEdgeImportanceScores(ds_new, g_base, C_loaded, alpha_ij, ess, save_edge_importance_path);
 
-            #pragma acc exit data delete(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
+            ds_new.acc_delete();
             // --- 終了時間計測 ---
             auto t_end = clock::now();
             std::chrono::duration<double> elapsed = t_end - t_start;
@@ -391,12 +381,7 @@ int main(int argc, char** argv){
         try {
             // 1) 新データセットのロード（CSV/TSV自動判定・ヘッダあり）
             Dataset ds_new = Dataset::fromCSV(score_dataset_path);
-
-            const int D = ds_new.D;
-            const int N = ds_new.N;
-            const int* ds_new_x_ptr = ds_new.X_flat.data();
-            const int* ds_new_r_ptr = ds_new.r.data();
-            #pragma acc enter data copyin(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
+            ds_new.acc_copyin();
 
             // 2) 構造（DAG）のロード（TSV/スペース; 既存の loadInitEdges を利用）
             if (init_path.empty())
@@ -429,7 +414,7 @@ int main(int argc, char** argv){
             std::cout << "log_likelihood_per_variable\t" << avgND << "\n";
             std::cout << "alpha_ij\t" << alpha_ij << "\n";
 
-            #pragma acc exit data delete(ds_new_x_ptr[0:N*D],ds_new_r_ptr[0:D])
+            ds_new.acc_delete();
             // --- 終了時間計測 ---
             auto t_end = clock::now();
             std::chrono::duration<double> elapsed = t_end - t_start;
@@ -444,12 +429,7 @@ int main(int argc, char** argv){
     // 単純な探索モード
     try{
         Dataset ds = Dataset::fromCSV(input_path);
-
-        const int D = ds.D;
-        const int N = ds.N;
-        const int* ds_x_ptr = ds.X_flat.data();
-        const int* ds_r_ptr = ds.r.data();
-        #pragma acc enter data copyin(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
+        ds.acc_copyin();
 
         DAG init = loadInitEdges(ds.D, init_path);
 
@@ -575,8 +555,7 @@ int main(int argc, char** argv){
                 return 2;
             }
         }
-        #pragma acc exit data delete(ds_x_ptr[0:N*D],ds_r_ptr[0:D])
-
+        ds.acc_delete();
     } catch (const std::exception& e){
         std::cerr << "Error: " << e.what() << "\n";
         return 2;
