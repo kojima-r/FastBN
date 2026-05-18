@@ -58,11 +58,25 @@ struct Counts {
     void assign(int q,int r){
         this->q_i = q;
         this->r_i = r;
+//        std::cout << "assign Counts " << q_i << " " << r_i << std::endl;
         n_ijk.resize((size_t)q_i * r_i);
-        std::fill(n_ijk.begin(), n_ijk.end(), 0);
         n_ij.resize(q_i);
-        std::fill(n_ij.begin(), n_ij.end(), 0);
-        acc_update_device();
+//        std::fill(n_ijk.begin(), n_ijk.end(), 0);
+//        std::fill(n_ij.begin(), n_ij.end(), 0);
+//        acc_update_device();
+        long long* nij  = n_ij.data();
+        long long* nijk = n_ijk.data();
+        #pragma acc data present(nij[0:q_i],nijk[0:q_i*r_i])
+        {
+            #pragma acc kernels present(nij[0:q_i])
+            for(int i=0;i<q_i;i++){
+                nij[i] = 0;
+            }
+            #pragma acc kernels present(nijk[0:q_i*r_i])
+            for(int i=0;i<q_i*r_i;i++){
+                nijk[i] = 0;
+            }
+        }
     }
     Counts& operator=(const Counts& other) {
 //        std::cout << "before copy address " << n_ij.data() << std::endl;

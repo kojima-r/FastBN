@@ -233,11 +233,11 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
 
             // 各サンプルについて j' と k を1回で決めてカウント
             #pragma acc parallel loop present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
+//            #pragma acc serial present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
             for (int n = 0; n < N; ++n) {
                 const int xu = ds_x_ptr[(size_t)n * D + u]; // ds.x(n, u);   // フラット配列アクセス
                 const int k  = ds_x_ptr[(size_t)n * D + v]; // ds.x(n, v);
                 const int j2 = xu;           // j=0 なので j2 = xu
-
                 #pragma acc atomic update
                 ++nij[j2];
                 #pragma acc atomic update
@@ -254,12 +254,12 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
         {
             // 各サンプルについて j' と k を1回で決めてカウント
             #pragma acc parallel loop
+//            #pragma acc serial
             for (int n = 0; n < N; ++n) {
                 const int j  = jptr[n];
                 const int xu = ds_x_ptr[(size_t)n * D + u]; // ds.x(n, u);   // フラット配列アクセス
                 const int k  = ds_x_ptr[(size_t)n * D + v]; // ds.x(n, v);
                 const int j2 = j * ru + xu;
-
                 #pragma acc atomic update
                 ++nij[j2];
                 #pragma acc atomic update
@@ -271,27 +271,43 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
     return scorer.nodeScore(newC) - nodeScoreNow[v];
 }
 
+#pragma acc routine seq
+int calc_right(const int* ds_r_ptr,int u,const int* _pa,int pa_size)
+{
+    int pos = -1;
+    for (int t=0; t<pa_size; ++t){
+        if(_pa[t]==u){
+            pos=t;
+        }
+    }
+    if(pos<0) return 0;
+    int right = 1;
+    for (int t=pos+1; t<pa_size; ++t){
+        right *= ds_r_ptr[_pa[t]];
+    }
+    return right;
+}
+
 double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC)
 {
     const Counts& curC = nodeCounts[v]; // Pa(v) に基づく現在の counts
 
-    // Pa(v) を取得して、u の位置（桁）と各基数を把握
-//        std::vector<int> Pa = g.parents(v);
-    int pos = -1; std::vector<int> pa_r; pa_r.reserve(Pa.size());
-    for (int t=0; t<(int)Pa.size(); ++t){
-        pa_r.push_back(ds.r[Pa[t]]);
-        if (Pa[t]==u) pos=t;
+    int right = 1;
+    const int* ds_r_ptr = ds.r.data();
+    int D = ds.D;
+    const int* _pa = Pa.data();
+    int pa_size = Pa.size();
+    #pragma acc serial present(ds_r_ptr[0:D],_pa[0:pa_size]) copy(right)
+    {
+        right = calc_right(ds_r_ptr,u,_pa,pa_size);
     }
-    if (pos<0) throw std::runtime_error("deltaRemove: u is not a parent of v (logic error).");
+    if(right==0) throw std::runtime_error("deltaRemove: u is not a parent of v (logic error).");
 
     int r_u = ds.r[u];
     int r_i = curC.r_i;
     int q   = curC.q_i;
     int q2  = q / r_u; // u の桁を落とすと親配置数は r_u 倍減る
 
-    // 右側（u より「下位桁」側）の基数の総乗
-    int right = 1;
-    for (int t=pos+1; t<(int)pa_r.size(); ++t) right *= pa_r[t];
     int period = right * r_u; // 1つ上の繰り返し周期
 
     newC.assign(q2,r_i);
@@ -305,7 +321,8 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
     // j' = floor(j / period) * right + (j % right)
     #pragma acc data present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
     {
-    #pragma acc kernels present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
+//    #pragma acc kernels present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
+    #pragma acc serial present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
     for (int j=0; j<q; ++j){
         int jp = (j / period) * right + (j % right);
         new_nij[jp] += cur_nij[j];
@@ -512,11 +529,11 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
 //        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
 //            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
-            for (int j = 0; j < C.q_i; ++j) {
-                double nij = (double)C.n_ij[j];
+            for (int j = 0; j < q_i; ++j) {
+                double nij = (double)_nij[j];
                 s += std::lgamma(alpha_ij_local) - std::lgamma(nij + alpha_ij_local);
-                for (int k = 0; k < C.r_i; ++k) {
-                    double nijk = (double)C.n_ijk[j*C.r_i + k];
+                for (int k = 0; k < r_i; ++k) {
+                    double nijk = (double)_nijk[j*C.r_i + k];
                     s += std::lgamma(nijk + alpha_ijk_base) - std::lgamma(alpha_ijk_base);
                 }
             }

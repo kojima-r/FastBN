@@ -33,11 +33,13 @@ struct Scorer {
 //            #pragma acc parallel loop reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
-                if (nij<=0) continue;
-                for (int k=0;k<r_i;++k){
-                    long long nijk=_nijk[(size_t)j*r_i+k];
-                    if (nijk==0) continue;
-                    ll += nijk * (log((double)nijk) - log(nij));
+                if (nij>0){
+                    for (int k=0;k<r_i;++k){
+                        long long nijk=_nijk[(size_t)j*r_i+k];
+                        if (nijk>0){
+                            ll += nijk * (log((double)nijk) - log(nij));
+                        }
+                    }
                 }
             }
         }
@@ -332,11 +334,11 @@ struct HillClimber {
     double deltaRemove_andBuildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC);
 
     // REVERSE(u->v): v 側は REMOVE（マージ）、u 側は ADD（分割）
-    double deltaReverse_buildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC_v, Counts& newC_u, double& d_v, double& d_u){
-        d_v = deltaRemove_andBuildNewCounts(u, v, Pa, newC_v); // v: 親 u を外す（マージ）
-        d_u = deltaAdd_andBuildNewCounts(v, u, newC_u);    // u: 親に v を加える（分割）
-        return d_v + d_u;
-    }
+//    double deltaReverse_buildNewCounts(int u, int v, const std::vector<int> &Pa, Counts& newC_v, Counts& newC_u, double& d_v, double& d_u){
+//        d_v = deltaRemove_andBuildNewCounts(u, v, Pa, newC_v); // v: 親 u を外す（マージ）
+//        d_u = deltaAdd_andBuildNewCounts(v, u, newC_u);    // u: 親に v を加える（分割）
+//        return d_v + d_u;
+//    }
 
     //==================== 実行（HC / Tabu） ====================
 
@@ -384,7 +386,7 @@ struct HillClimber {
         for (; it<max_iter; ++it){
             Move best; best.type=Move::NONE; best.delta=use_tabu?-1e300:0.0;
             Move bestNonTabu; bestNonTabu.type=Move::NONE; bestNonTabu.delta=-1e300;
-
+            std::cout<<"D="<<D<<std::endl;
             // 近傍列挙（ADD は候補親 K のみ、REMOVE/REVERSE は現辺）
             // Counts _newC,_newCu,_newCv;
             for (int v=0; v<D; ++v){
@@ -415,6 +417,9 @@ struct HillClimber {
 
                 // --- REMOVE 候補（現にある辺）---
                 std::vector<int> Pa = g.parents(v);
+                const int* _pa = Pa.data();
+                int pa_size = Pa.size();
+                #pragma acc enter data copyin(_pa[0:pa_size])
                 for (int u=0; u<D; ++u) if (g.adj[u][v]){
 //                    Counts newC;
                     double d = deltaRemove_andBuildNewCounts(u, v, Pa, tmpCounts_r);
@@ -439,6 +444,7 @@ struct HillClimber {
                     if (!tabu) { if (d > bestNonTabu.delta) bestNonTabu = mv; }
                     if (!tabu || asp) { if (d > best.delta) best = mv; }
                 }
+                #pragma acc exit data delete(_pa[0:pa_size])
             }
 
             // タブーによる最良不可→非タブー最良を選ぶ
@@ -466,6 +472,9 @@ struct HillClimber {
 
             } else if (chosen.type==Move::REMOVE){
                 std::vector<int> Pa = g.parents(chosen.v);
+                const int* _pa = Pa.data();
+                int pa_size = Pa.size();
+                #pragma acc enter data copyin(_pa[0:pa_size])
                 double d = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r);
                 tmpCounts_r.check_gpu("run REMOVE");
                 g.removeEdge(chosen.u, chosen.v);
@@ -478,9 +487,12 @@ struct HillClimber {
                 nodeCounts[chosen.v].check_gpu("run REMOVE commit");
                 nodeScoreNow[chosen.v] += d;
                 totalNow += d;
-
+                #pragma acc exit data delete(_pa[0:pa_size])
             } else if (chosen.type==Move::REVERSE){
                 std::vector<int> Pa = g.parents(chosen.v);
+                const int* _pa = Pa.data();
+                int pa_size = Pa.size();
+                #pragma acc enter data copyin(_pa[0:pa_size])
                 double dv = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r); // v: 親 u を外す（マージ）
                 double du = deltaAdd_andBuildNewCounts(chosen.v, chosen.u, tmpCounts_a);    // u: 親に v を加える（分割）
                 tmpCounts_a.check_gpu("run REVERSE");
@@ -502,6 +514,7 @@ struct HillClimber {
                 nodeScoreNow[chosen.v] += dv;
                 nodeScoreNow[chosen.u] += du;
                 totalNow += d;
+                #pragma acc exit data delete(_pa[0:pa_size])
             }
 
             setTabuAfter(chosen, it);
@@ -510,7 +523,7 @@ struct HillClimber {
             if (verbose){
                 std::string t = (chosen.type==Move::ADD?"ADD": chosen.type==Move::REMOVE?"REM":"REV");
                 std::cerr << "[it "<<it+1<<"] "<<t<<" "<<chosen.u<<"->"<<chosen.v
-                     <<"  delta="<<chosen.delta<<"  cur="<<totalNow<<"\n";
+                     <<"  delta="<<chosen.delta<<"  cur="<<totalNow<<std::endl;
             }
         }
         return {bestG, bestScore, it};

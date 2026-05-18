@@ -49,8 +49,7 @@ struct Dataset {
         return X_flat[(size_t)n * D + d];
     }
     ~Dataset(){
-        int* ds_x_ptr = X_flat.data();
-        int* ds_r_ptr = r.data();
+        acc_delete();
     }
     void acc_copyin(void){
         const int* ds_x_ptr = X_flat.data();

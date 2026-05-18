@@ -19,8 +19,8 @@ ${bin} --input ${input} --score bdeu \
   --save-names  ${output}/edges_named.tsv \
   --save-counts ${output}/all_counts.tsv > ${output}/01log.txt 2>&1
 
-python check_result.py ${output}/edges.tsv out/edges.tsv
-python check_result.py ${output}/edges_named.tsv out/edges_named.tsv
-python check_result.py ${output}/all_counts.tsv out/all_counts.tsv
+python3 check_result.py ${output}/edges.tsv out/edges.tsv
+python3 check_result.py ${output}/edges_named.tsv out/edges_named.tsv
+python3 check_result.py ${output}/all_counts.tsv out/all_counts.tsv
 
 cp ${bin} ${output}
