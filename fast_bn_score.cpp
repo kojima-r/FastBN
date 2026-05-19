@@ -2,6 +2,7 @@
 #include "fast_bn_dag.hpp"
 #include "fast_bn_lib.hpp"
 #include "fast_bn_score.hpp"
+#include "fast_bn_utils.hpp"
 
 #include <iostream>
 #ifdef __NVCOMPILER
@@ -208,6 +209,8 @@ std::vector<std::vector<int>> MICandidates::compute(const Dataset& ds, int K, in
     return topK;
 }
 
+#ifdef __NVCOMPILER
+
 double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
     const Counts& curC = nodeCounts[v];
     const int N = ds.N;
@@ -218,60 +221,157 @@ double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
     const int qp = q * ru;
 
     newC.assign(qp,r_i);
-//    newC.check_gpu("deltaAdd_andBuildNewCounts newC");
+//    newC.acc_update_host();
 
     const int* __restrict ds_x_ptr = ds.X_flat.data();
 
-    long long int* __restrict nij  = newC.n_ij.data();
-    long long int* __restrict nijk = newC.n_ijk.data();
+    long long* __restrict nij  = newC.n_ij.data();
+    long long* __restrict nijk = newC.n_ijk.data();
 
-    if (curC.q_i == 0)
+    long long* __restrict keys_ij = this->work_keys_ij.data();
+    long long* __restrict keys_ijk = this->work_keys_ijk.data();
+    long long* __restrict _unique_indices = this->unique_indices.data();
+    long long* __restrict _counts_indices = this->counts_indices.data();
+
+    #pragma acc data present(keys_ij[0:N],keys_ijk[0:N],ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
     {
-        #pragma acc data present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
+        if (curC.q_i == 0)
         {
             // 親なしの場合は j_index を呼ばない
-
             // 各サンプルについて j' と k を1回で決めてカウント
-            #pragma acc parallel loop present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
-//            #pragma acc serial present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
+            #pragma acc parallel loop independent
             for (int n = 0; n < N; ++n) {
-                const int xu = ds_x_ptr[(size_t)n * D + u]; // ds.x(n, u);   // フラット配列アクセス
-                const int k  = ds_x_ptr[(size_t)n * D + v]; // ds.x(n, v);
+                const int xu = ds_x_ptr[n * D + u];
+                const int k  = ds_x_ptr[n * D + v];
                 const int j2 = xu;           // j=0 なので j2 = xu
-                #pragma acc atomic update
-                ++nij[j2];
-                #pragma acc atomic update
-                ++nijk[(size_t)j2 * r_i + k];
+                keys_ij[n] = (long long)j2;
+                keys_ijk[n] = (long long)j2 * r_i + k;
             }
-            newC.acc_update_host();
         }
-    }
-    else{
-        // 親ありの場合
-        const int* __restrict jptr = jcache.get(v).data(); // Pa(v) に対応する j_index（キャッシュから取得）
-
-        #pragma acc data present(ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i]) copyin(jptr[0:N])
-        {
+        else{
+            // 親ありの場合
+            const int* __restrict jptr = jcache.get(v).data(); // Pa(v) に対応する j_index（キャッシュから取得）
             // 各サンプルについて j' と k を1回で決めてカウント
-            #pragma acc parallel loop
-//            #pragma acc serial
+            #pragma acc parallel loop independent present(jptr[0:N])
             for (int n = 0; n < N; ++n) {
                 const int j  = jptr[n];
-                const int xu = ds_x_ptr[(size_t)n * D + u]; // ds.x(n, u);   // フラット配列アクセス
-                const int k  = ds_x_ptr[(size_t)n * D + v]; // ds.x(n, v);
+                const int xu = ds_x_ptr[n * D + u];
+                const int k  = ds_x_ptr[n * D + v];
                 const int j2 = j * ru + xu;
-                #pragma acc atomic update
-                ++nij[j2];
-                #pragma acc atomic update
-                ++nijk[(size_t)j2 * r_i + k];
+                keys_ij[n] = (long long)j2;
+                keys_ijk[n] = (long long)j2 * r_i + k;
             }
-            newC.acc_update_host();
+        }
+
+        // OpenACCが管理しているkeys_ptrの「GPU側の生ポインタ」を取得して渡す
+        long long* d_keys_ij  = nullptr;
+        long long* d_keys_ijk = nullptr;
+        long long* d_unique_indices  = nullptr;
+        long long* d_counts_indices = nullptr;
+        #pragma acc host_data use_device(keys_ij,keys_ijk,_unique_indices,_counts_indices)
+        {
+            d_keys_ij = keys_ij;
+            d_keys_ijk = keys_ijk;
+            d_unique_indices  = _unique_indices;
+            d_counts_indices = _counts_indices;
+        }
+        // 頻度分布から nij nijk に代入する
+        size_t num_unique_ij = count_frequencies(d_keys_ij, N, d_unique_indices, d_counts_indices);
+        #pragma acc data present(nij[0:qp],_unique_indices[0:N],_counts_indices[0:N])
+        {
+            #pragma acc parallel loop independent
+            for (int j=0; j<qp; ++j){
+                nij[j] = 0;
+            }
+            #pragma acc parallel loop independent
+            for (size_t i = 0; i < num_unique_ij; ++i) {
+                nij[_unique_indices[i]] = _counts_indices[i];
+            }
+        }
+        size_t num_unique_ijk = count_frequencies(d_keys_ijk, N, d_unique_indices, d_counts_indices);
+        #pragma acc data present(nijk[0:qp*r_i],_unique_indices[0:N],_counts_indices[0:N])
+        {
+            #pragma acc parallel loop independent
+            for (int j=0; j<qp*r_i; ++j){
+                nijk[j] = 0;
+            }
+            #pragma acc parallel loop independent
+            for (size_t i = 0; i < num_unique_ijk; ++i) {
+                nijk[_unique_indices[i]] = _counts_indices[i];
+            }
         }
     }
+    newC.acc_update_host();
+//    newC.acc_update_device();
     return scorer.nodeScore(newC) - nodeScoreNow[v];
 }
 
-#pragma acc routine seq
+#else
+
+double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
+    const Counts& curC = nodeCounts[v];
+    const int N = ds.N;
+    const int ru = ds.r[u];
+    const int r_i = curC.r_i;
+
+    // 親なしの場合は j_index を呼ばない
+    if (curC.q_i == 0) {
+        const int q = 1;
+        const int qp = q * ru; // = ru
+
+        newC.q_i = qp;
+        newC.r_i = r_i;
+        newC.n_ij.assign(qp, 0);
+        newC.n_ijk.assign((size_t)qp * r_i, 0);
+
+        auto * __restrict nij  = newC.n_ij.data();
+        auto * __restrict nijk = newC.n_ijk.data();
+
+        // 各サンプルについて j' と k を1回で決めてカウント
+        for (int n = 0; n < N; ++n) {
+            const int xu = ds.x(n, u);   // フラット配列アクセス
+            const int k  = ds.x(n, v);
+            const int j2 = xu;           // j=0 なので j2 = xu
+
+            ++nij[j2];
+            ++nijk[(size_t)j2 * r_i + k];
+        }
+
+        return scorer.nodeScore(newC) - nodeScoreNow[v];
+    }
+
+    // 親ありの場合
+    const vector<int>& jindex = jcache.get(v); // Pa(v) に対応する j_index（キャッシュから取得）
+    const int q   = curC.q_i;
+    const int qp  = q * ru;
+
+    newC.q_i = qp;
+    newC.r_i = r_i;
+    newC.n_ij.assign(qp, 0);
+    newC.n_ijk.assign((size_t)qp * r_i, 0);
+
+    auto * __restrict nij  = newC.n_ij.data();
+    auto * __restrict nijk = newC.n_ijk.data();
+    const int * __restrict jptr = jindex.data();
+
+    // 各サンプルについて j' と k を1回で決めてカウント
+    for (int n = 0; n < N; ++n) {
+        const int j  = jptr[n];
+        const int xu = ds.x(n, u);   // フラット配列アクセス
+        const int k  = ds.x(n, v);
+        const int j2 = j * ru + xu;
+
+        ++nij[j2];
+        ++nijk[(size_t)j2 * r_i + k];
+    }
+
+    return scorer.nodeScore(newC) - nodeScoreNow[v];
+}
+
+
+#endif
+
+//#pragma acc routine seq
 int calc_right(const int* ds_r_ptr,int u,const int* _pa,int pa_size)
 {
     int pos = -1;
@@ -297,7 +397,7 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
     int D = ds.D;
     const int* _pa = Pa.data();
     int pa_size = Pa.size();
-    #pragma acc serial present(ds_r_ptr[0:D],_pa[0:pa_size]) copy(right)
+    //#pragma acc serial present(ds_r_ptr[0:D],_pa[0:pa_size]) copy(right)
     {
         right = calc_right(ds_r_ptr,u,_pa,pa_size);
     }
@@ -317,12 +417,21 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
     const long long int* __restrict cur_nij  = curC.n_ij.data();
     const long long int* __restrict cur_nijk = curC.n_ijk.data();
 
+    //#pragma acc parallel loop independent present(new_nij[0:q2])
+    for (int j=0; j<q2; ++j){
+        new_nij[j] = 0;
+    }
+    //#pragma acc parallel loop independent present(new_nijk[0:q2*r_i])
+    for (int j=0; j<q2*r_i; ++j){
+        new_nijk[j] = 0;
+    }
+
     // 旧インデックス j を新インデックス j' へ写像して合算
     // j' = floor(j / period) * right + (j % right)
-    #pragma acc data present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
+    //#pragma acc data present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
     {
 //    #pragma acc kernels present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
-    #pragma acc serial present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
+    //#pragma acc serial present(new_nij[0:q2],new_nijk[0:q2*r_i],cur_nij[0:q],cur_nijk[0:q*r_i])
     for (int j=0; j<q; ++j){
         int jp = (j / period) * right + (j % right);
         new_nij[jp] += cur_nij[j];
@@ -333,7 +442,8 @@ double HillClimber::deltaRemove_andBuildNewCounts(int u, int v, const std::vecto
         }
     }
     }
-    newC.acc_update_host();
+//    newC.acc_update_host();
+    newC.acc_update_device();
 
     return scorer.nodeScore(newC) - nodeScoreNow[v];
 }

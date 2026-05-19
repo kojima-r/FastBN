@@ -114,7 +114,25 @@ struct Scorer {
     LRU で保持ノード数を制限（--jindex-cache）。
 */
 struct JIndexCache {
-    struct Entry { int v; std::vector<int> j; std::list<int>::iterator it; };
+    struct Entry {
+        int v;
+        std::vector<int> j;
+        std::list<int>::iterator it;
+        ~Entry(){
+            std::cout << "destruct Entry " << v << std::endl;
+            acc_delete();
+        }
+        void acc_create(){
+            int* jj = j.data();
+            size_t n = j.size();
+            #pragma acc enter data copyin(jj[0:n])
+        }
+        void acc_delete(){
+            int* jj = j.data();
+            size_t n = j.size();
+            #pragma acc exit data delete(jj[0:n])
+        }
+    };
     int cap; // 最大保持ノード数（0 ならキャッシュ無効）
     const Dataset* ds;
     const DAG* g;
@@ -172,8 +190,17 @@ struct JIndexCache {
         if (cap==0){
             // 省メモリモード：都度 build して一時オブジェクトを返す（実用では cap>0 を推奨）
             static std::vector<int> tmp;
+            if( tmp.size()>0 ){
+                int* tt = tmp.data();
+                int n = tmp.size();
+                #pragma acc exit data delete(jj[0:n])
+            }
             build(v, tmp);
             // 注意: 本簡易実装では cap==0 の場合にメモリリークを許容（サンプル用途）
+            std::cout << "JIndexCache cap==0" << std::endl;
+            int* tt = tmp.data();
+            int n = tmp.size();
+            #pragma acc enter data copyin(tt[0:n])
             return *(new std::vector<int>(tmp));
         }
         if (mp.count(v)) { touch_(v); return mp[v]->j; }
@@ -183,6 +210,7 @@ struct JIndexCache {
         lru.push_front(v);
         e->it = lru.begin();
         mp[v] = std::move(e);
+        mp[v]->acc_create();
         evictIfNeeded_();
         return mp[v]->j;
     }
@@ -271,6 +299,11 @@ struct HillClimber {
       32
     };
 
+    // working
+    std::vector<long long> work_keys_ij;
+    std::vector<long long> work_keys_ijk;
+    std::vector<long long> unique_indices;
+    std::vector<long long> counts_indices;
 
     HillClimber(const Dataset& ds, ScoreType t, double ess,
                 const DAG& init, Reachability::Mode rmode,
@@ -290,6 +323,26 @@ struct HillClimber {
             totalNow += nodeScoreNow[v];
             nodeCounts[v].check_gpu();
         }
+
+        int N = ds.N;
+        work_keys_ij.resize(N);
+        work_keys_ijk.resize(N);
+        unique_indices.resize(N);
+        counts_indices.resize(N);
+        long long* p_ij = work_keys_ij.data();
+        long long* p_ijk = work_keys_ijk.data();
+        long long* p_unique = unique_indices.data();
+        long long* p_counts = counts_indices.data();
+        #pragma acc enter data create(p_ij[0:N],p_ijk[0:N],p_unique[0:N],p_counts[0:N])
+    }
+
+    ~HillClimber(){
+        int N = ds.N;
+        long long* p_ij = work_keys_ij.data();
+        long long* p_ijk = work_keys_ijk.data();
+        long long* p_unique = unique_indices.data();
+        long long* p_counts = counts_indices.data();
+        #pragma acc exit data delete(p_ij[0:N],p_ijk[0:N],p_unique[0:N],p_counts[0:N])
     }
 
     struct Move { enum Type { ADD, REMOVE, REVERSE, NONE } type=NONE; int u=-1, v=-1; double delta=0; };

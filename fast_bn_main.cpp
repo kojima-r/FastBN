@@ -215,7 +215,12 @@ Output & runtime:
     }
 }
 
+#ifndef GIT_HASH
+#define GIT_HASH "unknown"
+#endif
+
 int main(int argc, char** argv){
+    std::cout << "Git Hash: " << GIT_HASH << std::endl;
 #ifdef __NVCOMPILER
     acc_init(acc_device_nvidia);
     std::cout << "Device Type: " << acc_get_device_type() << std::endl;

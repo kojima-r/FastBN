@@ -14,21 +14,27 @@ struct Counts {
     std::vector<long long> n_ij;
     int q_i=0;
     int r_i=0;
+    int max_q = 128;
+    int max_r = 32;
     Counts(){
         std::cout << "construct Counts " << q_i << " " << r_i << std::endl;
-        n_ijk.reserve(4096);
-        n_ij.reserve(128);
+        n_ijk.resize(max_q*max_r);
+        n_ij.resize(max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        #pragma acc enter data create(nijk[0:4096],nij[0:128])
+        int q = max_q;
+        int r = max_r;
+        #pragma acc enter data create(nijk[0:q*r],nij[0:q])
     }
     Counts(const Counts& other){
         std::cout << "copy construct Counts " << q_i << " " << r_i << std::endl;
-        n_ijk.reserve(4096);
-        n_ij.reserve(128);
+        n_ijk.resize(max_q*max_r);
+        n_ij.resize(max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        #pragma acc enter data create(nijk[0:4096],nij[0:128])
+        int q = max_q;
+        int r = max_r;
+        #pragma acc enter data create(nijk[0:q*r],nij[0:q])
         *this = other;
         // 代入演算子で update device 済
     }
@@ -39,31 +45,26 @@ struct Counts {
         const int _r_i
     )
     {
-        n_ijk.reserve(4096);
-        n_ij.reserve(128);
-//        std::cout << "n_ijk address " << n_ijk.data() << std::endl;
-//        std::cout << "n_ij address " << n_ij.data() << std::endl;
+        n_ijk.resize(max_q*max_r);
+        n_ij.resize(max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        #pragma acc enter data create(nijk[0:4096],nij[0:128])
+        int q = max_q;
+        int r = max_r;
+        #pragma acc enter data create(nijk[0:q*r],nij[0:q])
         n_ijk = _n_ijk;
         n_ij = _n_ij;
         q_i = _q_i;
         r_i = _r_i;
         std::cout << "construct Counts " << q_i << " " << r_i << std::endl;
-//        std::cout << "n_ijk address " << n_ijk.data() << std::endl;
-//        std::cout << "n_ij address " << n_ij.data() << std::endl;
         acc_update_device();
     }
     void assign(int q,int r){
         this->q_i = q;
         this->r_i = r;
-//        std::cout << "assign Counts " << q_i << " " << r_i << std::endl;
         n_ijk.resize((size_t)q_i * r_i);
         n_ij.resize(q_i);
-//        std::fill(n_ijk.begin(), n_ijk.end(), 0);
-//        std::fill(n_ij.begin(), n_ij.end(), 0);
-//        acc_update_device();
+/*
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
         #pragma acc data present(nij[0:q_i],nijk[0:q_i*r_i])
@@ -77,6 +78,7 @@ struct Counts {
                 nijk[i] = 0;
             }
         }
+*/
     }
     Counts& operator=(const Counts& other) {
 //        std::cout << "before copy address " << n_ij.data() << std::endl;
@@ -103,7 +105,9 @@ struct Counts {
     void acc_delete(void){
         long long* __restrict nij  = n_ij.data();
         long long* __restrict nijk = n_ijk.data();
-        #pragma acc exit data delete(nij[0:128], nijk[0:4096])
+        int q = max_q;
+        int r = max_r;
+        #pragma acc exit data delete(nijk[0:q*r],nij[0:q])
     }
     void acc_update_host(void){
         if( q_i>0 && r_i> 0 ){
