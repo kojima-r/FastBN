@@ -49,10 +49,15 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
         -gpu=ccnative,cuda$ENV{CUDA_VERSION}
         -Minfo=accel
         -fast
+        -Kieee
         -cuda
     )
     target_link_options(fast_bn PRIVATE 
         -acc
+        -target=gpu
+        -gpu=ccnative,cuda$ENV{CUDA_VERSION}
+        -Minfo=accel
+        -fast
         -cuda
     )
 endif()

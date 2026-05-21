@@ -24,22 +24,25 @@ struct Scorer {
     // BIC: 対数尤度 - (d/2)*log(N), d=(r_i-1)*q_i
     double nodeScoreBIC(const Counts& c) const {
         double ll=0.0;
-        const long long* _nij  = c.n_ij.data();
-        const long long* _nijk = c.n_ijk.data();
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
 //        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+//            #pragma acc parallel loop independent reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 if (nij>0){
+                    double local_ll = 0.0;
+//                    #pragma acc loop seq
                     for (int k=0;k<r_i;++k){
                         long long nijk=_nijk[(size_t)j*r_i+k];
                         if (nijk>0){
-                            ll += nijk * (log((double)nijk) - log(nij));
+                            local_ll += nijk * (log((double)nijk) - log(nij));
                         }
                     }
+                    ll += local_ll;
                 }
             }
         }
@@ -51,20 +54,23 @@ struct Scorer {
     // K2: Dirichlet(1) 事前
     double nodeScoreK2(const Counts& c) const {
         double s=0.0;
-        const long long* _nij  = c.n_ij.data();
-        const long long* _nijk = c.n_ijk.data();
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
 //        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+//            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 s += lgamma((double)r_i) - lgamma(nij + (double)r_i);
+                double local_s = 0.0;
+//                #pragma acc loop seq
                 for (int k=0;k<r_i;++k){
                     double nijk=(double)_nijk[(size_t)j*r_i + k];
-                    s += lgamma(nijk + 1.0); // - lgamma(1) = 0
+                    local_s += lgamma(nijk + 1.0); // - lgamma(1) = 0
                 }
+                s += local_s;
             }
         }
         return s;
@@ -75,20 +81,23 @@ struct Scorer {
         double s=0.0;
         double alpha_ij = ess / (double)std::max(1,c.q_i);
         double alpha_ijk = alpha_ij / (double)c.r_i;
-        const long long* _nij  = c.n_ij.data();
-        const long long* _nijk = c.n_ijk.data();
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+//            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
+//                double local_s = 0.0;
+//                #pragma acc loop seq
                 for (int k=0;k<r_i;++k){
                     double nijk=(double)_nijk[(size_t)j*r_i + k];
                     s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
                 }
+//                s += local_s;
             }
         }
         return s;

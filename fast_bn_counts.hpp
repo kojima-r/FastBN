@@ -64,7 +64,6 @@ struct Counts {
         this->r_i = r;
         n_ijk.resize((size_t)q_i * r_i);
         n_ij.resize(q_i);
-/*
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
         #pragma acc data present(nij[0:q_i],nijk[0:q_i*r_i])
@@ -78,7 +77,6 @@ struct Counts {
                 nijk[i] = 0;
             }
         }
-*/
     }
     Counts& operator=(const Counts& other) {
 //        std::cout << "before copy address " << n_ij.data() << std::endl;
