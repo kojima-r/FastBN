@@ -9,6 +9,7 @@
 #include "fast_bn_dataset.hpp"
 #include "fast_bn_dag.hpp"
 #include "fast_bn_score.hpp"
+#include "fast_bn_counts.hpp"
 
 #ifdef __NVCOMPILER
 #include <openacc.h>
@@ -315,6 +316,8 @@ int main(int argc, char** argv){
         else if (need("--bootstrap"))             bootstrap_B = std::stoi(argv[++i]);
         else if (need("--seed"))        seed = std::stoull(argv[++i]);
         else if (need("--save-bootstrap-counts")) save_bootstrap_counts = argv[++i];
+        else if (need("--max_q")) count_max_q = std::stoi(argv[++i]);
+        else if (need("--max_r")) count_max_r = std::stoi(argv[++i]);
         else if (a=="--quiet") verbose=false;
         else { std::cerr<<"Unknown option: "<<a<<"\n"; return 1; }
     }

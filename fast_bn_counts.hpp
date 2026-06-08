@@ -4,7 +4,13 @@
 
 #include "fast_bn_dataset.hpp"
 
+#ifdef __NVCOMPILER
+#include <cuda_runtime.h>
+#endif
+
 //==================== カウント（n_ijk/n_ij） & スコア ====================
+static int count_max_q = 128;
+static int count_max_r = 32;
 
 struct Counts {
     // n_ijk: 親配置 j と 子状態 k の同時度数
@@ -14,26 +20,24 @@ struct Counts {
     std::vector<long long> n_ij;
     int q_i=0;
     int r_i=0;
-    int max_q = 128;
-    int max_r = 32;
     Counts(){
         std::cout << "construct Counts " << q_i << " " << r_i << std::endl;
-        n_ijk.resize(max_q*max_r);
-        n_ij.resize(max_q);
+        n_ijk.resize(count_max_q*count_max_r);
+        n_ij.resize(count_max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        int q = max_q;
-        int r = max_r;
+        int q = count_max_q;
+        int r = count_max_r;
         #pragma acc enter data create(nijk[0:q*r],nij[0:q])
     }
     Counts(const Counts& other){
         std::cout << "copy construct Counts " << q_i << " " << r_i << std::endl;
-        n_ijk.resize(max_q*max_r);
-        n_ij.resize(max_q);
+        n_ijk.resize(count_max_q*count_max_r);
+        n_ij.resize(count_max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        int q = max_q;
-        int r = max_r;
+        int q = count_max_q;
+        int r = count_max_r;
         #pragma acc enter data create(nijk[0:q*r],nij[0:q])
         *this = other;
         // 代入演算子で update device 済
@@ -45,12 +49,12 @@ struct Counts {
         const int _r_i
     )
     {
-        n_ijk.resize(max_q*max_r);
-        n_ij.resize(max_q);
+        n_ijk.resize(count_max_q*count_max_r);
+        n_ij.resize(count_max_q);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        int q = max_q;
-        int r = max_r;
+        int q = count_max_q;
+        int r = count_max_r;
         #pragma acc enter data create(nijk[0:q*r],nij[0:q])
         n_ijk = _n_ijk;
         n_ij = _n_ij;
@@ -66,17 +70,25 @@ struct Counts {
         n_ij.resize(q_i);
         long long* nij  = n_ij.data();
         long long* nijk = n_ijk.data();
-        #pragma acc data present(nij[0:q_i],nijk[0:q_i*r_i])
+#if defined __NVCOMPILER
+        #pragma acc host_data use_device(nij, nijk)
         {
-            #pragma acc kernels present(nij[0:q_i])
+            // OpenACCの async(1) に紐づく CUDA ストリームを取得
+            cudaStream_t stream = (cudaStream_t)acc_get_cuda_stream(1);
+            // バイト単位で指定するため、要素数 × sizeof(型) を指定
+            cudaMemsetAsync(nij,  0, q_i * sizeof(long long), stream);
+            cudaMemsetAsync(nijk, 0, q_i * r_i * sizeof(long long), stream);
+        }
+#else
+        {
             for(int i=0;i<q_i;i++){
                 nij[i] = 0;
             }
-            #pragma acc kernels present(nijk[0:q_i*r_i])
             for(int i=0;i<q_i*r_i;i++){
                 nijk[i] = 0;
             }
         }
+#endif
     }
     Counts& operator=(const Counts& other) {
 //        std::cout << "before copy address " << n_ij.data() << std::endl;
@@ -103,8 +115,8 @@ struct Counts {
     void acc_delete(void){
         long long* __restrict nij  = n_ij.data();
         long long* __restrict nijk = n_ijk.data();
-        int q = max_q;
-        int r = max_r;
+        int q = count_max_q;
+        int r = count_max_r;
         #pragma acc exit data delete(nijk[0:q*r],nij[0:q])
     }
     void acc_update_host(void){

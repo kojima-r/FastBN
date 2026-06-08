@@ -21,6 +21,7 @@ struct Scorer {
 
     Scorer(const Dataset& ds, ScoreType t, double ess=1.0): ds(ds), type(t), ess(ess) {}
 
+#if defined RELAX
     // BIC: 対数尤度 - (d/2)*log(N), d=(r_i-1)*q_i
     double nodeScoreBIC(const Counts& c) const {
         double ll=0.0;
@@ -28,14 +29,14 @@ struct Scorer {
         const long long* __restrict _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop independent reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            #pragma acc parallel loop independent reduction(+:ll) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 if (nij>0){
                     double local_ll = 0.0;
-//                    #pragma acc loop seq
+                    #pragma acc loop seq
                     for (int k=0;k<r_i;++k){
                         long long nijk=_nijk[(size_t)j*r_i+k];
                         if (nijk>0){
@@ -58,14 +59,14 @@ struct Scorer {
         const long long* __restrict _nijk = c.n_ijk.data();
         int q_i = c.q_i;
         int r_i = c.r_i;
-//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 s += lgamma((double)r_i) - lgamma(nij + (double)r_i);
                 double local_s = 0.0;
-//                #pragma acc loop seq
+                #pragma acc loop seq
                 for (int k=0;k<r_i;++k){
                     double nijk=(double)_nijk[(size_t)j*r_i + k];
                     local_s += lgamma(nijk + 1.0); // - lgamma(1) = 0
@@ -87,24 +88,91 @@ struct Scorer {
         int r_i = c.r_i;
         #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-//            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            #pragma acc parallel loop independent reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
             for (int j=0;j<q_i;++j){
                 double nij=(double)_nij[j];
                 s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
-//                double local_s = 0.0;
-//                #pragma acc loop seq
+                double local_s = 0.0;
+                #pragma acc loop seq
                 for (int k=0;k<r_i;++k){
                     double nijk=(double)_nijk[(size_t)j*r_i + k];
-                    s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
+                    local_s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
                 }
-//                s += local_s;
+                s += local_s;
+            }
+        }
+        return s;
+    }
+#else
+    // BIC: 対数尤度 - (d/2)*log(N), d=(r_i-1)*q_i
+    double nodeScoreBIC(const Counts& c) const {
+        double ll=0.0;
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+        {
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                if (nij>0){
+                    for (int k=0;k<r_i;++k){
+                        long long nijk=_nijk[(size_t)j*r_i+k];
+                        if (nijk>0){
+                            ll += nijk * (log((double)nijk) - log(nij));
+                        }
+                    }
+                }
+            }
+        }
+        int d=(c.r_i-1)*c.q_i;
+        double pen = 0.5 * d * log((double)std::max(1, ds.N));
+        return ll - pen;
+    }
+
+    // K2: Dirichlet(1) 事前
+    double nodeScoreK2(const Counts& c) const {
+        double s=0.0;
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+        {
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                s += lgamma((double)r_i) - lgamma(nij + (double)r_i);
+                for (int k=0;k<r_i;++k){
+                    double nijk=(double)_nijk[(size_t)j*r_i + k];
+                    s += lgamma(nijk + 1.0); // - lgamma(1) = 0
+                }
             }
         }
         return s;
     }
 
+    // BDeu: 一様ハイパーパラメータ（等価事例数 ess を q_i, r_i に均等割）
+    double nodeScoreBDeu(const Counts& c) const {
+        double s=0.0;
+        double alpha_ij = ess / (double)std::max(1,c.q_i);
+        double alpha_ijk = alpha_ij / (double)c.r_i;
+        const long long* __restrict _nij  = c.n_ij.data();
+        const long long* __restrict _nijk = c.n_ijk.data();
+        int q_i = c.q_i;
+        int r_i = c.r_i;
+        {
+            for (int j=0;j<q_i;++j){
+                double nij=(double)_nij[j];
+                s += lgamma(alpha_ij) - lgamma(nij + alpha_ij);
+                for (int k=0;k<r_i;++k){
+                    double nijk=(double)_nijk[(size_t)j*r_i + k];
+                    s += lgamma(nijk + alpha_ijk) - lgamma(alpha_ijk);
+                }
+            }
+        }
+        return s;
+    }
+#endif
+
     double nodeScore(const Counts& c) const {
-//        c.check_gpu("nodeScore");
         switch(type){
             case ScoreType::BIC: return nodeScoreBIC(c);
             case ScoreType::K2:  return nodeScoreK2(c);
@@ -177,7 +245,7 @@ struct JIndexCache {
         out.assign(N, 0);
         if (pa.empty()) return;
         std::vector<int> radix;
-        build_mixed_radix(pa, *ds, radix);
+        build_mixed_radix(pa, ds->r, radix);
         const int P = (int)pa.size();
         const int D = ds->D;
         const int* pa_ptr = pa.data();
@@ -296,16 +364,16 @@ struct HillClimber {
     std::vector<double> nodeScoreNow;
     double totalNow = 0.0;
     Counts tmpCounts_a = {
-      std::vector<long long>(4096),
-      std::vector<long long>(128),
-      128,
-      32
+      std::vector<long long>(count_max_q*count_max_r),
+      std::vector<long long>(count_max_q),
+      count_max_q,
+      count_max_r
     };
     Counts tmpCounts_r = {
-      std::vector<long long>(4096),
-      std::vector<long long>(128),
-      128,
-      32
+      std::vector<long long>(count_max_q*count_max_r),
+      std::vector<long long>(count_max_q),
+      count_max_q,
+      count_max_r
     };
 
     // working
@@ -326,7 +394,7 @@ struct HillClimber {
         for (int v=0; v<ds.D; ++v){
             auto Pa = g.parents(v);
             std::vector<int> radix;
-            build_mixed_radix(Pa, ds, radix);
+            build_mixed_radix(Pa, ds.r, radix);
             nodeCounts.emplace_back(computeCountsForNode_full(v, Pa, ds, radix));
             nodeScoreNow.emplace_back(scorer.nodeScore(nodeCounts[v]));
             totalNow += nodeScoreNow[v];
@@ -685,7 +753,7 @@ inline void saveAllCountsTSV(const std::string& path, const Dataset& ds, const D
 
         // 再度カウント（q_i は親配置数）
         std::vector<int> radix;
-        build_mixed_radix(pa, ds, radix);
+        build_mixed_radix(pa, ds.r, radix);
         Counts C = computeCountsForNode_full(v, pa, ds, radix);
         const int r_i = C.r_i;         // 子の取りうる値の数
         int q_i = C.q_i;               // 親配置数
@@ -881,7 +949,7 @@ static std::vector<int> buildJIndexForParents(const Dataset& ds,
     if (parents.empty()) return jidx;
     // 右端の親が最下位桁になる混合基数
     std::vector<int> radix;
-    build_mixed_radix(parents, ds, radix);
+    build_mixed_radix(parents, ds.r, radix);
     const int P = (int)parents.size();
     const int D = ds.D;
     const int N = ds.N;

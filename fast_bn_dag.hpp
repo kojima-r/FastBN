@@ -153,7 +153,7 @@ inline int mixedRadixIndex(const std::vector<int>& parents, const std::vector<in
 //  ds.r   : 各変数の取りうる値の数 r[i]
 //  radix  : 出力 (サイズ P)。j = Σ ds.x(n, parents[t]) * radix[t] で使用。
 static inline void build_mixed_radix(const std::vector<int>& parents,
-                                     const Dataset& ds,
+                                     const std::vector<int>& r,
                                      std::vector<int>& radix) noexcept
 {
     const int P = (int)parents.size();
@@ -163,7 +163,7 @@ static inline void build_mixed_radix(const std::vector<int>& parents,
     }
     // 既存容量を再利用しつつ、サイズだけ合わせる
     radix.assign(P, 1);
-    const int* ds_r_ptr = ds.r.data();
+    const int* ds_r_ptr = r.data();
     int* rdx_ptr = radix.data();
     const int* pa_ptr = parents.data();
     // 右から順に混合基数を構成

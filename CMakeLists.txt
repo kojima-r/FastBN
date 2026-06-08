@@ -21,6 +21,10 @@ execute_process(
     ERROR_QUIET
 )
 
+if(RELAX)
+    add_compile_definitions(RELAX=1)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_executable(fast_bn
         fast_bn_main.cpp
@@ -35,7 +39,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
     find_package(OpenACC REQUIRED)
     add_executable(fast_bn
         fast_bn_main.cpp
-        fast_bn_score.cpp
+        fast_bn_score_gpu.cpp
         fast_bn_counts.cpp
         fast_bn_utils.cpp
     )

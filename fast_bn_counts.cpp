@@ -29,8 +29,6 @@ Counts computeCountsForNode_full(int i, const std::vector<int>& parents, const D
 
     std::cout << "computeCountsForNode_full" << " D " << D << " N " << N << " P " << P << std::endl;
 
-    // ds_x_ptr rdx_ptr pa_ptr が GPU にある事を確認する
-    // データがなかったら落ちる
     #pragma acc data present(ds_x_ptr[0:N*D])
     {
         if (parents.empty()) {

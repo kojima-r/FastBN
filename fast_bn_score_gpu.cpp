@@ -4,59 +4,118 @@
 #include "fast_bn_score.hpp"
 #include "fast_bn_utils.hpp"
 
+#include <iostream>
+
 double AssocCandidates::mutual_info_pair(const Dataset& ds, int u, int v, const std::vector<int>& rows) {
     int ru = ds.r[u], rv = ds.r[v];
+    size_t row_size = rows.size();
+    int ds_N = ds.N;
+    int ds_D = ds.D;
     std::vector<long long> cu(ru,0), cv(rv,0);
-    std::unordered_map<long long, long long> cuv; cuv.reserve(rows.size()*2);
-    auto key = [&](int a,int b)->long long { return (long long)a * (long long)rv + b; };
+    std::vector<long long> keys(row_size,0);
+    std::vector<long long> unique(row_size,0);
+    std::vector<long long> counts(row_size,0);
+    const int* _rows = rows.data();
+    const int* ds_x_ptr = ds.X_flat.data();
+    long long* _cu = cu.data();
+    long long* _cv = cv.data();
+    long long* _keys = keys.data();
+    long long* _unique = unique.data();
+    long long* _counts = counts.data();
+    double mi = 0.0;
 
-    for (int idx: rows){
-        int a = ds.x(idx,u), b = ds.x(idx,v);
-        ++cu[a]; ++cv[b]; ++cuv[key(a,b)];
+    #pragma acc data copyin(_rows[0:row_size]) \
+                     copy(_cu[0:ru], _cv[0:rv], mi) \
+                     create(_keys[0:row_size], _unique[0:row_size], _counts[0:row_size]) \
+                     present(ds_x_ptr[0:ds_N*ds_D])
+    {
+    #pragma acc parallel loop independent
+    for (int i=0; i< row_size; i++){
+        int idx = _rows[i];
+        int a = ds_x_ptr[(size_t)idx * ds_D + u];
+        int b = ds_x_ptr[(size_t)idx * ds_D + v];
+        #pragma acc atomic update
+        ++_cu[a];
+        #pragma acc atomic update
+        ++_cv[b];
+        _keys[i] = (long long)a*rv + b;
     }
-    double N = (double)rows.size();
-    double mi=0.0;
-    for (auto &kv : cuv) {
-        long long ab = kv.second;
-        int a = (int)(kv.first / rv);
-        int b = (int)(kv.first % rv);
+
+    long long* d_keys  = nullptr;
+    long long* d_unique_indices  = nullptr;
+    long long* d_counts_indices = nullptr;
+    #pragma acc host_data use_device(_keys,_unique,_counts)
+    {
+        d_keys = _keys;
+        d_unique_indices  = _unique;
+        d_counts_indices = _counts;
+    }
+    size_t num_unique = count_frequencies(d_keys, row_size, d_unique_indices, d_counts_indices);
+    double N = (double)row_size;
+    #pragma acc parallel loop reduction(+:mi)
+    for(size_t i = 0; i < num_unique; i++ ){
+        long long ab = _counts[i];
+        int a = (int)(_unique[i] / rv);
+        int b = (int)(_unique[i] % rv);
         if (ab==0) continue;
         double pab = ab / N;
-        double pa  = cu[a] / N;
-        double pb  = cv[b] / N;
+        double pa  = _cu[a] / N;
+        double pb  = _cv[b] / N;
         mi += pab * std::log( (pab + 1e-300) / (pa * pb + 1e-300) );
+    }
     }
     return mi; // nats
 }
 
 std::pair<double,double> AssocCandidates::chi2_p_pair(const Dataset& ds, int u, int v, const std::vector<int>& rows) {
     int ru = ds.r[u], rv = ds.r[v];
+    size_t row_size = rows.size();
+    if (row_size <= 0) return {1.0, 0.0};
+    int df = (ru - 1) * (rv - 1);
+    if (df <= 0) return {1.0, 0.0};
+    int ds_N = ds.N;
+    int ds_D = ds.D;
     std::vector<long long> cu(ru,0), cv(rv,0);
     std::vector<long long> tab((size_t)ru * rv, 0);
-
-    for (int idx: rows){
-        int a = ds.x(idx,u), b = ds.x(idx,v);
-        ++cu[a]; ++cv[b];
-        ++tab[(size_t)a * rv + b];
-    }
-
-    double N = (double)rows.size();
-    if (N <= 0.0) return {1.0, 0.0};
-
+    const int* _rows = rows.data();
+    const int* ds_x_ptr = ds.X_flat.data();
+    long long* _cu = cu.data();
+    long long* _cv = cv.data();
+    long long* _tab = tab.data();
     // カイ二乗統計量
     double chi2 = 0.0;
+
+    #pragma acc data copyin(_rows[0:row_size]) \
+                     copy(_cu[0:ru], _cv[0:rv], _tab[0:ru*rv], chi2) \
+                     present(ds_x_ptr[0:ds_N*ds_D])
+    {
+    #pragma acc parallel loop independent
+    for (int i=0; i< row_size; i++){
+        int idx = _rows[i];
+        int a = ds_x_ptr[(size_t)idx * ds_D + u];
+        int b = ds_x_ptr[(size_t)idx * ds_D + v];
+        #pragma acc atomic update
+        ++_cu[a];
+        #pragma acc atomic update
+        ++_cv[b];
+        #pragma acc atomic update
+        ++_tab[(size_t)a * rv + b];
+    }
+
+    double N = (double)row_size;
+
+    #pragma acc parallel loop collapse(2) reduction(+:chi2)
     for (int a=0; a<ru; ++a) {
         for (int b=0; b<rv; ++b) {
-            double obs = (double)tab[(size_t)a * rv + b];
-            double expv = (double)cu[a] * (double)cv[b] / N;
+            double obs = (double)_tab[(size_t)a * rv + b];
+            double expv = (double)_cu[a] * (double)_cv[b] / N;
             if (expv > 0.0) {
                 double diff = obs - expv;
                 chi2 += diff * diff / expv;
             }
         }
     }
-    int df = (ru - 1) * (rv - 1);
-    if (df <= 0) return {1.0, 0.0};
+    }
     double p = chisq_p_upper(chi2, df);
     return {p, chi2};
 }
@@ -131,27 +190,60 @@ std::vector<std::vector<int>> AssocCandidates::compute(
 
 double MICandidates::mutual_info_pair(const Dataset& ds, int u, int v, const std::vector<int>& rows){
     int ru = ds.r[u], rv = ds.r[v];
+    size_t row_size = rows.size();
+    int ds_N = ds.N;
+    int ds_D = ds.D;
     std::vector<long long> cu(ru,0), cv(rv,0);
-    std::unordered_map<long long, long long> cuv; cuv.reserve(rows.size()*2);
-    auto key = [&](int a,int b)->long long { return (long long)a * (long long)rv + b; };
+    std::vector<long long> keys(row_size,0);
+    std::vector<long long> unique(row_size,0);
+    std::vector<long long> counts(row_size,0);
+    const int* _rows = rows.data();
+    const int* ds_x_ptr = ds.X_flat.data();
+    long long* _cu = cu.data();
+    long long* _cv = cv.data();
+    long long* _keys = keys.data();
+    long long* _unique = unique.data();
+    long long* _counts = counts.data();
+    double mi = 0.0;
 
-    for (int idx: rows){
-        int au = ds.x(idx,u), bv = ds.x(idx,v);
-        ++cu[au]; ++cv[bv]; ++cuv[key(au,bv)];
+    #pragma acc data copyin(_rows[0:row_size]) \
+                     copy(_cu[0:ru], _cv[0:rv], mi) \
+                     create(_keys[0:row_size], _unique[0:row_size], _counts[0:row_size]) \
+                     present(ds_x_ptr[0:ds_N*ds_D])
+    {
+    #pragma acc parallel loop independent
+    for (int i=0; i< row_size; i++){
+        int idx = _rows[i];
+        int au = ds_x_ptr[(size_t)idx * ds_D + u];
+        int bv = ds_x_ptr[(size_t)idx * ds_D + v];
+        #pragma acc atomic update
+        ++_cu[au];
+        #pragma acc atomic update
+        ++_cv[bv];
+        _keys[i] = (long long)au*rv + bv;
     }
-
-    double N = (double)rows.size();
-    double mi=0.0;
-    for (auto &kv : cuv){
-        long long ab = kv.second;
-        int a = (int)(kv.first / rv);
-        int b = (int)(kv.first % rv);
+    long long* d_keys  = nullptr;
+    long long* d_unique_indices  = nullptr;
+    long long* d_counts_indices = nullptr;
+    #pragma acc host_data use_device(_keys,_unique,_counts)
+    {
+        d_keys = _keys;
+        d_unique_indices  = _unique;
+        d_counts_indices = _counts;
+    }
+    size_t num_unique = count_frequencies(d_keys, row_size, d_unique_indices, d_counts_indices);
+    double N = (double)row_size;
+    #pragma acc parallel loop reduction(+:mi)
+    for(size_t i = 0; i < num_unique; i++ ){
+        long long ab = _counts[i];
+        int a = (int)(_unique[i] / rv);
+        int b = (int)(_unique[i] % rv);
         if (ab==0) continue;
         double pab = ab / N;
-        double pa  = cu[a] / N;
-        double pb  = cv[b] / N;
-        // 数値安定用に 1e-300 を加える
-        mi += pab * log( (pab + 1e-300) / (pa * pb + 1e-300) );
+        double pa  = _cu[a] / N;
+        double pb  = _cv[b] / N;
+        mi += pab * std::log( (pab + 1e-300) / (pa * pb + 1e-300) );
+    }
     }
     return mi;
 }
@@ -205,60 +297,96 @@ std::vector<std::vector<int>> MICandidates::compute(const Dataset& ds, int K, in
 double HillClimber::deltaAdd_andBuildNewCounts(int u, int v, Counts& newC) {
     const Counts& curC = nodeCounts[v];
     const int N = ds.N;
+    const int D = ds.D;
     const int ru = ds.r[u];
     const int r_i = curC.r_i;
+    const int q = (curC.q_i == 0) ? 1 : curC.q_i;
+    const int qp = q * ru;
 
-    // 親なしの場合は j_index を呼ばない
-    if (curC.q_i == 0) {
-        const int q = 1;
-        const int qp = q * ru; // = ru
+    newC.assign(qp,r_i);
+//    newC.acc_update_host();
 
-        newC.q_i = qp;
-        newC.r_i = r_i;
-        newC.n_ij.assign(qp, 0);
-        newC.n_ijk.assign((size_t)qp * r_i, 0);
+    const int* __restrict ds_x_ptr = ds.X_flat.data();
 
-        auto * __restrict nij  = newC.n_ij.data();
-        auto * __restrict nijk = newC.n_ijk.data();
+    long long* __restrict nij  = newC.n_ij.data();
+    long long* __restrict nijk = newC.n_ijk.data();
 
-        // 各サンプルについて j' と k を1回で決めてカウント
-        for (int n = 0; n < N; ++n) {
-            const int xu = ds.x(n, u);   // フラット配列アクセス
-            const int k  = ds.x(n, v);
-            const int j2 = xu;           // j=0 なので j2 = xu
+    long long* __restrict keys_ij = this->work_keys_ij.data();
+    long long* __restrict keys_ijk = this->work_keys_ijk.data();
+    long long* __restrict _unique_indices = this->unique_indices.data();
+    long long* __restrict _counts_indices = this->counts_indices.data();
 
-            ++nij[j2];
-            ++nijk[(size_t)j2 * r_i + k];
+    #pragma acc data present(keys_ij[0:N],keys_ijk[0:N],ds_x_ptr[0:N*D],nij[0:qp],nijk[0:qp*r_i])
+    {
+        if (curC.q_i == 0)
+        {
+            // 親なしの場合は j_index を呼ばない
+            // 各サンプルについて j' と k を1回で決めてカウント
+            #pragma acc parallel loop independent
+            for (int n = 0; n < N; ++n) {
+                const int xu = ds_x_ptr[n * D + u];
+                const int k  = ds_x_ptr[n * D + v];
+                const int j2 = xu;           // j=0 なので j2 = xu
+                keys_ij[n] = (long long)j2;
+                keys_ijk[n] = (long long)j2 * r_i + k;
+            }
+        }
+        else{
+            // 親ありの場合
+            const int* __restrict jptr = jcache.get(v).data(); // Pa(v) に対応する j_index（キャッシュから取得）
+            // 各サンプルについて j' と k を1回で決めてカウント
+            #pragma acc parallel loop independent present(jptr[0:N])
+            for (int n = 0; n < N; ++n) {
+                const int j  = jptr[n];
+                const int xu = ds_x_ptr[n * D + u];
+                const int k  = ds_x_ptr[n * D + v];
+                const int j2 = j * ru + xu;
+                keys_ij[n] = (long long)j2;
+                keys_ijk[n] = (long long)j2 * r_i + k;
+            }
         }
 
-        return scorer.nodeScore(newC) - nodeScoreNow[v];
+        // OpenACCが管理しているkeys_ptrの「GPU側の生ポインタ」を取得して渡す
+        long long* d_keys_ij  = nullptr;
+        long long* d_keys_ijk = nullptr;
+        long long* d_unique_indices  = nullptr;
+        long long* d_counts_indices = nullptr;
+        #pragma acc host_data use_device(keys_ij,keys_ijk,_unique_indices,_counts_indices)
+        {
+            d_keys_ij = keys_ij;
+            d_keys_ijk = keys_ijk;
+            d_unique_indices  = _unique_indices;
+            d_counts_indices = _counts_indices;
+        }
+        // 頻度分布から nij nijk に代入する
+        size_t num_unique_ij = count_frequencies(d_keys_ij, N, d_unique_indices, d_counts_indices);
+        #pragma acc data present(nij[0:qp],_unique_indices[0:N],_counts_indices[0:N])
+        {
+            #pragma acc parallel loop independent
+            for (int j=0; j<qp; ++j){
+                nij[j] = 0;
+            }
+            #pragma acc parallel loop independent
+            for (size_t i = 0; i < num_unique_ij; ++i) {
+                nij[_unique_indices[i]] = _counts_indices[i];
+            }
+        }
+        size_t num_unique_ijk = count_frequencies(d_keys_ijk, N, d_unique_indices, d_counts_indices);
+        #pragma acc data present(nijk[0:qp*r_i],_unique_indices[0:N],_counts_indices[0:N])
+        {
+            #pragma acc parallel loop independent
+            for (int j=0; j<qp*r_i; ++j){
+                nijk[j] = 0;
+            }
+            #pragma acc parallel loop independent
+            for (size_t i = 0; i < num_unique_ijk; ++i) {
+                nijk[_unique_indices[i]] = _counts_indices[i];
+            }
+        }
     }
-
-    // 親ありの場合
-    const std::vector<int>& jindex = jcache.get(v); // Pa(v) に対応する j_index（キャッシュから取得）
-    const int q   = curC.q_i;
-    const int qp  = q * ru;
-
-    newC.q_i = qp;
-    newC.r_i = r_i;
-    newC.n_ij.assign(qp, 0);
-    newC.n_ijk.assign((size_t)qp * r_i, 0);
-
-    auto * __restrict nij  = newC.n_ij.data();
-    auto * __restrict nijk = newC.n_ijk.data();
-    const int * __restrict jptr = jindex.data();
-
-    // 各サンプルについて j' と k を1回で決めてカウント
-    for (int n = 0; n < N; ++n) {
-        const int j  = jptr[n];
-        const int xu = ds.x(n, u);   // フラット配列アクセス
-        const int k  = ds.x(n, v);
-        const int j2 = j * ru + xu;
-
-        ++nij[j2];
-        ++nijk[(size_t)j2 * r_i + k];
-    }
-
+#ifndef RELAX
+    newC.acc_update_host();
+#endif
     return scorer.nodeScore(newC) - nodeScoreNow[v];
 }
 
@@ -437,6 +565,7 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
     const int N = ds_new.N;
     const double logN = std::log((double)std::max(1, N));
 
+#ifdef RELAX
     // ========== スコア計算関数群 ==========
     auto nodeLogLikelihood = [&](const Counts &C) -> double {
         double ll = 0.0;
@@ -446,17 +575,19 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         int r_i = C.r_i;
         #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            #pragma acc parallel loop reduction(+:ll)
             for (int j = 0; j < q_i; ++j) {
+                double local_ll = 0.0;
                 for (int k = 0; k < r_i; ++k) {
                     double nij = (double)_nij[j];
                     if (nij > 0){
                         long long nijk = _nijk[j*r_i + k];
                         if (nijk > 0){
-                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                            local_ll += nijk * (std::log((double)nijk) - std::log(nij));
                         }
                     }
                 }
+                ll += local_ll;
             }
         }
         return ll;
@@ -470,17 +601,19 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         int r_i = C.r_i;
         #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
-            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            #pragma acc parallel loop reduction(+:ll)
             for (int j = 0; j < q_i; ++j) {
+                double local_ll = 0.0;
                 for (int k = 0; k < r_i; ++k) {
                     double nij = (double)_nij[j];
                     if (nij > 0){
                         long long nijk = _nijk[j*r_i + k];
                         if (nijk > 0){
-                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                            local_ll += nijk * (std::log((double)nijk) - std::log(nij));
                         }
                     }
                 }
+                ll += local_ll;
             }
         }
         int d = (C.r_i - 1) * C.q_i;
@@ -518,6 +651,104 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         const long long* _nijk = C.n_ijk.data();
         int q_i = C.q_i;
         int r_i = C.r_i;
+        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
+            for (int j = 0; j < q_i; ++j) {
+                double nij = (double)_nij[j];
+                s += std::lgamma(alpha_ij_local) - std::lgamma(nij + alpha_ij_local);
+                double local_s = 0.0;
+                for (int k = 0; k < r_i; ++k) {
+                    double nijk = (double)_nijk[j*C.r_i + k];
+                    local_s += std::lgamma(nijk + alpha_ijk_base) - std::lgamma(alpha_ijk_base);
+                }
+                s += local_s;
+            }
+        }
+        return s;
+    };
+#else
+    // ========== スコア計算関数群 ==========
+    auto nodeLogLikelihood = [&](const Counts &C) -> double {
+        double ll = 0.0;
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            for (int j = 0; j < q_i; ++j) {
+                for (int k = 0; k < r_i; ++k) {
+                    double nij = (double)_nij[j];
+                    if (nij > 0){
+                        long long nijk = _nijk[j*r_i + k];
+                        if (nijk > 0){
+                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                        }
+                    }
+                }
+            }
+        }
+        return ll;
+    };
+
+    auto nodeBIC = [&](const Counts &C) -> double {
+        double ll = 0.0;
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop collapse(2) reduction(+:ll)
+            for (int j = 0; j < q_i; ++j) {
+                for (int k = 0; k < r_i; ++k) {
+                    double nij = (double)_nij[j];
+                    if (nij > 0){
+                        long long nijk = _nijk[j*r_i + k];
+                        if (nijk > 0){
+                            ll += nijk * (std::log((double)nijk) - std::log(nij));
+                        }
+                    }
+                }
+            }
+        }
+        int d = (C.r_i - 1) * C.q_i;
+        double pen = 0.5 * d * logN;
+        return ll - pen;
+    };
+
+    auto nodeK2 = [&](const Counts &C) -> double {
+        double s = 0.0;
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
+//        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
+        {
+//            #pragma acc parallel loop reduction(+:s)
+            for (int j = 0; j < q_i; ++j) {
+                double nij = (double)_nij[j];
+                s += std::lgamma((double)r_i) - std::lgamma(nij + (double)r_i);
+                for (int k = 0; k < r_i; ++k) {
+                    double nijk = (double)_nijk[j*r_i + k];
+                    s += std::lgamma(nijk + 1.0);
+                }
+            }
+        }
+        return s;
+    };
+
+    auto nodeBDeu = [&](const Counts &C) -> double {
+        double s = 0.0;
+        if (C.q_i == 0) return -INFINITY;
+        double alpha_ij_local = ess / (double)C.q_i;
+        double alpha_ijk_base = alpha_ij_local / (double)C.r_i;
+        const long long* _nij  = C.n_ij.data();
+        const long long* _nijk = C.n_ijk.data();
+        int q_i = C.q_i;
+        int r_i = C.r_i;
 //        #pragma acc data present(_nij[0:q_i],_nijk[0:q_i*r_i])
         {
 //            #pragma acc parallel loop reduction(+:s) present(_nij[0:q_i],_nijk[0:q_i*r_i])
@@ -532,6 +763,7 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         }
         return s;
     };
+#endif
 
     // ========== 元スコア計算 ==========
     double baseLL = 0.0, baseBIC = 0.0, baseK2 = 0.0, baseBDeu = 0.0;
