@@ -1,9 +1,10 @@
 #!/bin/bash
 
 export NV_ACC_TIME=1
+#export NVCOMPILER_ACC_DEBUG=1
 
 bin=../fast_bn
-output=./`date +%Y%m%d_%H%M%S`_02_bs_tri
+output=./`date +%Y%m%d_%H%M%S`_gpu_02_bs_tri
 mkdir -p ${output}
 
 for seed in `seq 1 5`

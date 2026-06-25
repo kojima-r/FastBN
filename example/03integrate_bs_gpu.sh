@@ -1,9 +1,10 @@
 #!/bin/bash
 
 export NV_ACC_TIME=1
+#export NVCOMPILER_ACC_DEBUG=1
 
 bin=../fast_bn
-output=./`date +%Y%m%d_%H%M%S`_03_bs
+output=./`date +%Y%m%d_%H%M%S`_gpu_03_bs
 mkdir -p ${output}
 
 # Run without searching (iters=0) to output integ_all_counts.tsv

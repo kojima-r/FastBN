@@ -3,7 +3,7 @@
 export NV_ACC_TIME=1
 
 bin=../fast_bn
-output=./`date +%Y%m%d_%H%M%S`_05_importance
+output=./`date +%Y%m%d_%H%M%S`_gpu_05_importance
 
 ${bin} --score bic \
   --edge-importance \

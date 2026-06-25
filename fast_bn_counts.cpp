@@ -27,8 +27,6 @@ Counts computeCountsForNode_full(int i, const std::vector<int>& parents, const D
     const int* pa_ptr = parents.data();
     const int P = (int)parents.size();
 
-    std::cout << "computeCountsForNode_full" << " D " << D << " N " << N << " P " << P << std::endl;
-
     #pragma acc data present(ds_x_ptr[0:N*D])
     {
         if (parents.empty()) {

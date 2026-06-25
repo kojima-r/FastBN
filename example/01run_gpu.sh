@@ -4,12 +4,12 @@
 #
 
 export NV_ACC_TIME=1
-export NVCOMPILER_ACC_NOTIFY=3
+#export NVCOMPILER_ACC_NOTIFY=3
 #export NVCOMPILER_ACC_DEBUG=0x800
 
 bin=../fast_bn
 input=./data_bin/all_disc100.tsv
-output=./`date +%Y%m%d_%H%M%S`_01
+output=./`date +%Y%m%d_%H%M%S`_gpu_01
 mkdir -p ${output}
 
 # profile を取る時は NV_ACC_TIME を無効にすること

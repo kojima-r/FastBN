@@ -468,12 +468,10 @@ DeltaStats perSampleDeltaLogLStats(const Dataset& ds_new,
     std::vector<int> radix_before;
     build_mixed_radix(parents_before, ds_new.r, radix_before);
     Counts C_before = computeCountsForNode_full(v, parents_before, ds_new, radix_before);
-    C_before.check_gpu("perSampleDeltaLogLStats before");
 
     std::vector<int> radix_after;
     build_mixed_radix(parents_after, ds_new.r, radix_after);
     Counts C_after  = computeCountsForNode_full(v, parents_after , ds_new, radix_after);
-    C_after.check_gpu("perSampleDeltaLogLStats after");
 
     std::vector<int> j_before = buildJIndexForParents(ds_new,parents_before);
     std::vector<int> j_after  = buildJIndexForParents(ds_new,parents_after);
@@ -772,7 +770,6 @@ void computeEdgeImportanceScores(const Dataset& ds_new,
         std::vector<int> radix;
         build_mixed_radix(pa, ds_new.r, radix);
         Counts C = computeCountsForNode_full(v, pa, ds_new, radix);
-        C.check_gpu("computeEdgeImportanceScores");
 
         baseLL  += nodeLogLikelihood(C);
         baseBIC += nodeBIC(C);
@@ -891,7 +888,6 @@ void runBootstrapStructureCounts(const Dataset& ds,
         const int N = ds_b.N;
         const int* ds_b_x_ptr = ds_b.X_flat.data();
         const int* ds_b_r_ptr = ds_b.r.data();
-        std::cout << "Dataset copyin " << N << " " << D << std::endl;
         #pragma acc enter data copyin(ds_b_x_ptr[0:N*D],ds_b_r_ptr[0:D])
 
 
@@ -942,7 +938,6 @@ void runBootstrapStructureCounts(const Dataset& ds,
                       << " edges_seen=" << edge_counts.size() << "\n";
         }
 
-        std::cout << "Dataset delete " << N << " " << D << std::endl;
         #pragma acc exit data delete(ds_b_x_ptr[0:N*D],ds_b_r_ptr[0:D])
     }
 

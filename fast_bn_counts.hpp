@@ -21,7 +21,6 @@ struct Counts {
     int q_i=0;
     int r_i=0;
     Counts(){
-        std::cout << "construct Counts " << q_i << " " << r_i << std::endl;
         n_ijk.resize(count_max_q*count_max_r);
         n_ij.resize(count_max_q);
         long long* nij  = n_ij.data();
@@ -31,7 +30,6 @@ struct Counts {
         #pragma acc enter data create(nijk[0:q*r],nij[0:q])
     }
     Counts(const Counts& other){
-        std::cout << "copy construct Counts " << q_i << " " << r_i << std::endl;
         n_ijk.resize(count_max_q*count_max_r);
         n_ij.resize(count_max_q);
         long long* nij  = n_ij.data();
@@ -60,7 +58,6 @@ struct Counts {
         n_ij = _n_ij;
         q_i = _q_i;
         r_i = _r_i;
-        std::cout << "construct Counts " << q_i << " " << r_i << std::endl;
         acc_update_device();
     }
     void assign(int q,int r){
@@ -91,18 +88,14 @@ struct Counts {
 #endif
     }
     Counts& operator=(const Counts& other) {
-//        std::cout << "before copy address " << n_ij.data() << std::endl;
         this->q_i = other.q_i;
         this->r_i = other.r_i;
         this->n_ij = other.n_ij;
         this->n_ijk = other.n_ijk;
-        std::cout << "copy operator " << q_i << " " << r_i << std::endl;
-//        std::cout << "after copy address " << n_ij.data() << std::endl;
         acc_update_device();
         return *this;
     }
     ~Counts(){
-        std::cout << "destruct Counts " << q_i << " " << r_i << std::endl;
         acc_delete();
     }
     void acc_update_device(void){

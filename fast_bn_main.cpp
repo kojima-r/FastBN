@@ -221,10 +221,10 @@ Output & runtime:
 #endif
 
 int main(int argc, char** argv){
-    std::cout << "Git Hash: " << GIT_HASH << std::endl;
+    std::cout << "[info] Git Hash: " << GIT_HASH << std::endl;
 #ifdef __NVCOMPILER
     acc_init(acc_device_nvidia);
-    std::cout << "Device Type: " << acc_get_device_type() << std::endl;
+    std::cout << "[info] Device Type: " << acc_get_device_type() << std::endl;
 #endif
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);

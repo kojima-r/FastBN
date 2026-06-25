@@ -13,6 +13,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 message(STATUS ${CMAKE_CXX_COMPILER_ID})
 
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler")
+set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
+
 execute_process(
     COMMAND git rev-parse --short HEAD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -43,26 +46,32 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
         fast_bn_counts.cpp
         fast_bn_utils.cpp
     )
-    target_compile_definitions(fast_bn PRIVATE GIT_HASH="${GIT_HASH}")
+    target_compile_definitions(fast_bn PRIVATE
+        GIT_HASH="${GIT_HASH}"
+        USE_GPU=1
+        CCCL_IGNORE_DEPRECATED_CUDA_BELOW_12=1
+    )
     if(OpenACC_CXX_FOUND)
         target_link_libraries(fast_bn PRIVATE OpenACC::OpenACC_CXX)
     endif()
     target_compile_options(fast_bn PRIVATE
         -acc
+        -cuda
+        -nostdpar
         -target=gpu
-        -gpu=ccnative,cuda$ENV{CUDA_VERSION}
+        -gpu=ccnative
         -Minfo=accel
         -fast
         -Kieee
-        -cuda
     )
     target_link_options(fast_bn PRIVATE 
         -acc
+        -cuda
+        -nostdpar
         -target=gpu
-        -gpu=ccnative,cuda$ENV{CUDA_VERSION}
+        -gpu=ccnative
         -Minfo=accel
         -fast
-        -cuda
     )
 endif()
 

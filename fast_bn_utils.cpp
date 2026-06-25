@@ -8,8 +8,9 @@
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/constant_iterator.h>
 #include <openacc.h> // acc_malloc などのため
+#include <cstddef>
 
-size_t count_frequencies(long long* d_input_keys, int N,
+std::size_t count_frequencies(long long* d_input_keys, int N,
         long long* d_unique_keys, long long* d_counts) {
 
     thrust::device_ptr<long long> th_keys(d_input_keys);

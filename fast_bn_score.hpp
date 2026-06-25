@@ -196,7 +196,6 @@ struct JIndexCache {
         std::vector<int> j;
         std::list<int>::iterator it;
         ~Entry(){
-            std::cout << "destruct Entry " << v << std::endl;
             acc_delete();
         }
         void acc_create(){
@@ -398,7 +397,6 @@ struct HillClimber {
             nodeCounts.emplace_back(computeCountsForNode_full(v, Pa, ds, radix));
             nodeScoreNow.emplace_back(scorer.nodeScore(nodeCounts[v]));
             totalNow += nodeScoreNow[v];
-            nodeCounts[v].check_gpu();
         }
 
         int N = ds.N;
@@ -480,9 +478,6 @@ struct HillClimber {
                           << "[start] score="<<cur<<" edges="<<g.edges().size()
                           << " mode="<<(use_tabu?"tabu":"greedy")<<"\n";
 
-        tmpCounts_a.check_gpu("run a");
-        tmpCounts_r.check_gpu("run r");
-
         const int D = ds.D;
         // タブー配列（属性タブー：直近操作の巻き戻しを禁止）
         std::vector<std::vector<int>> tabu_add_until(D, std::vector<int>(D,-1));
@@ -516,7 +511,6 @@ struct HillClimber {
         for (; it<max_iter; ++it){
             Move best; best.type=Move::NONE; best.delta=use_tabu?-1e300:0.0;
             Move bestNonTabu; bestNonTabu.type=Move::NONE; bestNonTabu.delta=-1e300;
-            std::cout<<"D="<<D<<std::endl;
             // 近傍列挙（ADD は候補親 K のみ、REMOVE/REVERSE は現辺）
             // Counts _newC,_newCu,_newCv;
             for (int v=0; v<D; ++v){
@@ -588,15 +582,10 @@ struct HillClimber {
             // ===== 実適用（DAG / reach / j_index / counts / scores を整合させる） =====
             if (chosen.type==Move::ADD){
                 double d = deltaAdd_andBuildNewCounts(chosen.u, chosen.v, tmpCounts_a);
-                tmpCounts_a.check_gpu("run ADD");
                 g.addEdge(chosen.u, chosen.v);
                 reach.onAddEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.v});          // v の親が変わったので j_index[v] を無効化
-                std::cout << "ADD (q,r) " <<
-                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
-                    "(" << tmpCounts_a.q_i << "," << tmpCounts_a.r_i << ")" << std::endl;
                 nodeCounts[chosen.v] = tmpCounts_a;            // v の counts を差し替え
-                nodeCounts[chosen.v].check_gpu("run ADD commit");
                 nodeScoreNow[chosen.v] += d;                  // v のスコアだけ増分更新
                 totalNow += d;                                 // 全体スコア更新
 
@@ -606,15 +595,10 @@ struct HillClimber {
                 int pa_size = Pa.size();
                 #pragma acc enter data copyin(_pa[0:pa_size])
                 double d = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r);
-                tmpCounts_r.check_gpu("run REMOVE");
                 g.removeEdge(chosen.u, chosen.v);
                 reach.onRemoveEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.v});
-                std::cout << "REMOVE (q,r) " <<
-                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
-                    "(" << tmpCounts_r.q_i << "," << tmpCounts_r.r_i << ")" << std::endl;
                 nodeCounts[chosen.v] = tmpCounts_r;
-                nodeCounts[chosen.v].check_gpu("run REMOVE commit");
                 nodeScoreNow[chosen.v] += d;
                 totalNow += d;
                 #pragma acc exit data delete(_pa[0:pa_size])
@@ -625,22 +609,12 @@ struct HillClimber {
                 #pragma acc enter data copyin(_pa[0:pa_size])
                 double dv = deltaRemove_andBuildNewCounts(chosen.u, chosen.v, Pa, tmpCounts_r); // v: 親 u を外す（マージ）
                 double du = deltaAdd_andBuildNewCounts(chosen.v, chosen.u, tmpCounts_a);    // u: 親に v を加える（分割）
-                tmpCounts_a.check_gpu("run REVERSE");
-                tmpCounts_r.check_gpu("run REVERSE");
                 double d = du + dv;
                 g.reverseEdge(chosen.u, chosen.v);
                 reach.onReverseEdge(g, chosen.u, chosen.v);
                 jcache.onParentsChanged({chosen.u, chosen.v});
-                std::cout << "REVERSE (q,r) " <<
-                    "(" << nodeCounts[chosen.v].q_i << "," << nodeCounts[chosen.v].r_i << ") => " <<
-                    "(" << tmpCounts_r.q_i << "," << tmpCounts_r.r_i << ")" << std::endl;
-                std::cout << "REVERSE (q,r) " <<
-                    "(" << nodeCounts[chosen.u].q_i << "," << nodeCounts[chosen.u].r_i << ") => " <<
-                    "(" << tmpCounts_a.q_i << "," << tmpCounts_a.r_i << ")" << std::endl;
                 nodeCounts[chosen.v] = tmpCounts_r;
                 nodeCounts[chosen.u] = tmpCounts_a;
-                nodeCounts[chosen.v].check_gpu("run REVERSE commit");
-                nodeCounts[chosen.u].check_gpu("run REVERSE commit");
                 nodeScoreNow[chosen.v] += dv;
                 nodeScoreNow[chosen.u] += du;
                 totalNow += d;
