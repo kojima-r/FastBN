@@ -1,0 +1,9 @@
+# 生成物 (スクリプトで再生成できるのでコミットしない)
+data/
+out/
+bs/
+groups/
+figures/
+figures_bs/
+report.html
+target_genes.txt

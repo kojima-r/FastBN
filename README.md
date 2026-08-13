@@ -19,7 +19,25 @@ Includes:
 | ----------------------------------- | -------- | -------------------------------------------------------------------- |
 | `fast_bn`                           | C++17    | Main executable for structure learning, bootstrap, and edge analysis |
 | `compute_cpt_from_counts.py`        | Python 3 | Postprocessor: compute CPTs from `--save-counts` output              |
+| `compute_bs_prob.py`                | Python 3 | Postprocessor: integrate bootstrap runs into a consensus structure   |
 | `init_edges.tsv` / `all_counts.tsv` | TSV      | Intermediate structures saved/loaded between runs                    |
+| `script/`                           | Bash+Py  | Reusable pipeline for **bulk RNA expression data**: preprocessing (normalize → log → filter → discretize), learning, edge importance, bootstrap stability, per-group comparison, plots, HTML report — see `script/README.md` |
+| `example/`                          | Bash     | Minimal `fast_bn` walkthrough on pre-discretized mouse expression data |
+| `example_bulk/`                     | Bash+Py  | End-to-end pipeline example on generated dummy bulk RNA counts (true network known, so accuracy is measurable) — see `example_bulk/README.md` |
+
+### Analyzing your own bulk RNA expression data
+
+```bash
+mkdir my_analysis && cd my_analysis
+cp ../example_bulk/config.sh .        # edit EXPR_INPUT / SAMPLE_META / ID_COL ...
+source ./config.sh
+../script/run_pipeline.sh             # preprocess → learn → importance → bootstrap → plots → report
+```
+
+Each stage is also a standalone script (`../script/preprocess.sh`,
+`learn_structure.sh`, `edge_importance.sh`, `bootstrap_stability.sh`,
+`importance_groups.sh`, `viz*.sh`, `make_report.sh`) configured through
+environment variables. See `script/README.md` for the full list.
 
 ---
 
