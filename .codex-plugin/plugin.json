@@ -1,0 +1,37 @@
+{
+  "name": "bn-analysis",
+  "version": "0.1.0",
+  "description": "Infer, score, bootstrap and visualize Bayesian networks from expression matrices (bulk RNA-seq, single-cell, proteomics) with the FastBN Hill-Climb + Tabu learner, and benchmark the result against a known network.",
+  "author": {
+    "name": "Ryosuke Kojima",
+    "url": "https://github.com/kojima-r"
+  },
+  "homepage": "https://github.com/kojima-r/FastBN",
+  "repository": "https://github.com/kojima-r/FastBN",
+  "license": "MIT",
+  "keywords": [
+    "bayesian-network",
+    "structure-learning",
+    "causal-discovery",
+    "gene-regulatory-network",
+    "rna-seq",
+    "single-cell",
+    "bioinformatics",
+    "network-visualization"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Bayesian Network Analysis (FastBN)",
+    "shortDescription": "Infer and visualize networks from omics data",
+    "longDescription": "Drives the FastBN pipeline end to end: inspect an expression matrix, derive learning parameters from the number of samples, variables and discretization levels, learn a DAG with Hill-Climb + Tabu search, compute edge importance, estimate edge stability by bootstrap resampling, compare experimental groups, draw the network and bundle everything into an HTML report. Also scores a learned structure against a known pathway or gold-standard network (SHD, directed/skeleton precision-recall-F1, SID, KL).",
+    "developerName": "Ryosuke Kojima",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/kojima-r/FastBN",
+    "defaultPrompt": [
+      "Infer a gene network from counts.tsv and visualize it.",
+      "Bootstrap the edge stability of this network.",
+      "Compare the learned network with the known pathway."
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: expression-network-inference
-description: This skill should be used when the user hands over an expression matrix (bulk RNA-seq counts/TPM, single-cell, proteomics, or any sample x feature table) and wants a network inferred, scored, stabilized or visualized — "estimate a gene network", "learn a Bayesian network / DAG from this data", "which edges are important", "bootstrap edge stability", "compare conditions", "draw the network", "発現データからネットワークを推定して", "遺伝子ネットワークを可視化", "エッジの重要度・安定性を調べたい", "群間で比較したい". It drives the FastBN pipeline (preprocess -> Hill-Climb+Tabu structure learning -> edge importance -> bootstrap consensus -> per-group comparison -> figures -> HTML report).
+description: This skill should be used when the user hands over an expression matrix (bulk RNA-seq counts/TPM, single-cell, proteomics, or any sample x feature table) and wants a network inferred, scored, stabilized or visualized — "estimate a gene network", "learn a Bayesian network / DAG from this data", "which edges are important", "bootstrap edge stability", "compare conditions", "draw the network", "発現データからネットワークを推定して", "遺伝子ネットワークを可視化", "エッジの重要度・安定性を調べたい", "群間で比較したい". It drives the FastBN pipeline — preprocess, Hill-Climb+Tabu structure learning, edge importance, bootstrap consensus, per-group comparison, figures, HTML report.
 license: MIT
 ---
 
@@ -14,24 +14,28 @@ license: MIT
 
 ### 0. 環境の解決 — 必ず最初
 
+`SKILL_DIR` = **この `SKILL.md` があるディレクトリ** (ホストが提示したパスから決まる。
+Claude Code のプラグインなら `${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference`、
+Codex なら `<プラグイン>/skills/...` や `.codex/skills/...` / `${CODEX_HOME}/skills/...`、
+FastBN のチェックアウト内なら `${FASTBN_HOME}/skills/...`)。
+
 ```bash
-eval "$(bash "${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/fastbn_env.sh")"
+SKILL_DIR=<このファイルのあるディレクトリ>
+eval "$(bash "${SKILL_DIR}/scripts/fastbn_env.sh")"
 ```
 
 `FASTBN_HOME` / `FASTBN_BIN` / `BN_SCRIPTS` / `PYTHON_BIN` を export し、バイナリが
 無ければビルドし、Python 依存 (numpy/pandas/networkx/matplotlib) を検査する。
-失敗したときのメッセージに従う (詳細は `references/troubleshooting.md`)。
 
-> **スクリプトの場所**: プラグインとして導入した場合は
-> `${CLAUDE_PLUGIN_ROOT}/skills/<このスキル名>/scripts/`、`skills/` を単独でコピーした
-> 場合はこの `SKILL.md` と同じディレクトリの `scripts/` にある。どちらでもない場合は
-> FastBN のチェックアウト内 (`${FASTBN_HOME}/skills/.../scripts/`) を使う。
+FastBN 本体 (`fast_bn.cpp` と `script/`) が見つからないと言われた場合は、
+`FASTBN_HOME` を教えてもらうか `git clone https://github.com/kojima-r/FastBN.git`
+してから再実行する (詳細は `references/troubleshooting.md`)。
 
 
 ### 1. データを見てから設定を決める (推測で config を書かない)
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/inspect_matrix.py" \
+python3 "${SKILL_DIR}/scripts/inspect_matrix.py" \
     --input <ユーザのファイル> [--meta <サンプル情報>] [--sheet <Excel シート>]
 ```
 
@@ -46,7 +50,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/inspe
 ### 2. 解析ディレクトリを作る
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/new_analysis.sh" \
+bash "${SKILL_DIR}/scripts/new_analysis.sh" \
     <解析ディレクトリ> --expr <ユーザのファイル> [--meta <サンプル情報>]
 ```
 

@@ -27,56 +27,90 @@ Includes:
 | `example_sachs/`                    | Bash+Py  | **Benchmark** on the Sachs single-cell protein-signaling data (Zenodo) against the experimentally validated pathway — see `example_sachs/README.md` |
 | `example_dream/`                    | Bash+Py  | **Benchmark** on the DREAM challenges (DREAM4 in silico, DREAM5; HPN-DREAM needs manual Synapse download) — see `example_dream/README.md` |
 | `example_bulk/`                     | Bash+Py  | End-to-end pipeline example on generated dummy bulk RNA counts (true network known, so accuracy is measurable) — see `example_bulk/README.md` |
-| `.claude-plugin/`, `skills/`, `commands/` | Markdown+Bash+Py | Claude Code plugin / marketplace manifests, Agent Skills and slash commands that drive this pipeline from an agent — see [Use from Claude Code / Claude Science](#-use-from-claude-code--claude-science-plugin--skills) |
+| `skills/`, `commands/`, `.claude-plugin/`, `.codex-plugin/` | Markdown+Bash+Py | Agent Skills (shared by Claude Code and OpenAI Codex), Claude slash commands, and both plugin/marketplace manifests — see [Use from coding agents](#-use-from-coding-agents-claude-code--claude-science--codex) |
 
-## 🔌 Use from Claude Code / Claude Science (plugin & skills)
+## 🔌 Use from coding agents (Claude Code / Claude Science / Codex)
 
-This repository doubles as a Claude Code **plugin marketplace**. `.claude-plugin/marketplace.json`
-lists one plugin, `bn-analysis`, whose root is the repository itself — so installing the plugin
-brings `fast_bn.cpp`, `script/` and the runnable examples along with the skills, and
+The analysis workflow is packaged as **Agent Skills** in `skills/`, which is the single source of
+truth for both ecosystems (the `SKILL.md` format is common to Claude Code and OpenAI Codex):
+
+| Skill | Role |
+| --- | --- |
+| `expression-network-inference` | An expression matrix arrives → inspect it, derive parameters, run preprocess → learn → importance → bootstrap → per-group → figures → `report.html`, then interpret the result |
+| `network-structure-evaluation` | Score a learned DAG against a known pathway, a gold standard, a BIF network or a simulation's true DAG (SHD, directed/skeleton P-R-F1, SID, KL) |
+
+They carry the operational knowledge that is easy to get wrong: node index = column position, the
+`--iters 0` idiom, `--seed` (not `--bootstrap-seed`), how `ITERS` / `MAX_PARENTS` / `N_BINS` /
+bootstrap counts follow from D, N and the number of bins, and why edge directions must not be
+reported as causal claims.
+
+### Inside this repository — no configuration needed
+
+`.claude/skills/` and `.codex/skills/` hold relative symlinks to `skills/`, so both agents discover
+the skills as project skills as soon as they are started in this directory. `AGENTS.md` (Codex) and
+`CLAUDE.md` (Claude Code) carry the repository-level invariants.
+
+> Git checkouts on filesystems without symlink support (Windows without `core.symlinks`) get plain
+> text files instead; copy `skills/<name>` into `.codex/skills/` / `.claude/skills/` there.
+
+### Claude Code / Claude Science
+
+This repository is also a Claude Code **plugin marketplace**: `.claude-plugin/marketplace.json`
+lists one plugin, `bn-analysis`, whose root is the repository itself — so installing it brings
+`fast_bn.cpp`, `script/` and the runnable examples along with the skills, and
 `${CLAUDE_PLUGIN_ROOT}` points at a complete FastBN checkout.
-
-### Install as a plugin
 
 ```bash
 /plugin marketplace add kojima-r/FastBN
 /plugin install bn-analysis@fastbn
 ```
 
-Working from a local checkout (development / testing):
+The plugin adds three slash commands: `/bn-analysis:analyze <matrix> [meta] [dir]` (end-to-end
+inference), `/bn-analysis:setup [--smoke-test]` (build the binary, check deps) and
+`/bn-analysis:evaluate <true-edges|bif>` (compare against a reference structure).
+
+Local checkout (development / testing):
 
 ```bash
-claude --plugin-dir /path/to/FastBN     # load for one session
+claude --plugin-dir /path/to/FastBN     # load the plugin for one session
 claude plugin validate /path/to/FastBN  # check the manifests
 ```
 
-### What the plugin provides
+### OpenAI Codex
 
-| Component | Name | Role |
-| --- | --- | --- |
-| Skill | `expression-network-inference` | An expression matrix arrives → inspect it, derive parameters, run preprocess → learn → importance → bootstrap → per-group → figures → `report.html`, then interpret the result |
-| Skill | `network-structure-evaluation` | Score a learned DAG against a known pathway, a gold standard, a BIF network or a simulation's true DAG (SHD, directed/skeleton P-R-F1, SID, KL) |
-| Command | `/bn-analysis:analyze <matrix> [meta] [dir]` | End-to-end network inference from a data file |
-| Command | `/bn-analysis:setup [--smoke-test]` | Resolve/build `fast_bn`, check Python deps, optional end-to-end smoke test |
-| Command | `/bn-analysis:evaluate <true-edges\|bif>` | Compare a learned network with a reference structure |
-
-The skills carry the operational knowledge that is easy to get wrong: node index = column
-position, the `--iters 0` idiom, `--seed` (not `--bootstrap-seed`), how `ITERS` /
-`MAX_PARENTS` / `N_BINS` / bootstrap counts follow from D, N and the number of bins, and why
-edge directions must not be reported as causal claims.
-
-### Use as a plain skills directory (Claude Science, claude.ai, other agents)
-
-`skills/` follows the standard Agent Skills layout (`<name>/SKILL.md` + `references/` +
-`scripts/`), so it can be used without the plugin machinery: copy a skill directory into
-`~/.claude/skills/` (or `.claude/skills/` for one project), or upload it as a custom skill.
-In that mode point the helper scripts at this repository:
+The same skills work in Codex CLI. Personal install:
 
 ```bash
-export FASTBN_HOME=/path/to/FastBN
+cp -r skills/expression-network-inference "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -r skills/network-structure-evaluation "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
 
-### Helper scripts (usable directly)
+Or install the whole thing as a Codex plugin — `.codex-plugin/plugin.json` is the manifest and
+`.agents/plugins/marketplace.json` is the repo marketplace:
+
+```bash
+codex plugin marketplace add kojima-r/FastBN   # or a local path to this checkout
+codex plugin add bn-analysis@fastbn
+codex plugin list
+```
+
+Each skill ships `agents/openai.yaml` (display name, short description, `$skill` starter prompt)
+for Codex's skill list. Invoke a skill explicitly with `$expression-network-inference` /
+`$network-structure-evaluation`, or let Codex trigger it from the description.
+
+> A **local** plugin install copies the working tree as it is, including downloaded datasets and
+> generated run directories (this checkout is several hundred MB). For distribution prefer the Git
+> source, which carries only tracked files.
+
+Validate a change to the Codex manifests with the CLI's own system skills:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py" .
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" \
+        skills/expression-network-inference
+```
+
+### Helper scripts (usable directly, no agent involved)
 
 ```bash
 S=skills/expression-network-inference/scripts

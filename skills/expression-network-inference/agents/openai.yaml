@@ -1,0 +1,4 @@
+interface:
+  display_name: "Expression Network Inference"
+  short_description: "Infer and visualize networks from omics data"
+  default_prompt: "Use $expression-network-inference to infer a gene network from counts.tsv and visualize it."

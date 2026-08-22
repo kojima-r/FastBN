@@ -1,0 +1,4 @@
+interface:
+  display_name: "Network Structure Evaluation"
+  short_description: "Score a learned DAG against a known network"
+  default_prompt: "Use $network-structure-evaluation to compare out/edges.tsv with the known pathway."

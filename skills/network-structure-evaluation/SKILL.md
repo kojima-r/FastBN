@@ -11,14 +11,15 @@ license: MIT
 
 ## 環境
 
+`expression-network-inference` スキルのスクリプトを使う (同じ `skills/` の下にある)。
+
 ```bash
-eval "$(bash "${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/fastbn_env.sh")"
+SKILLS_DIR=<この SKILL.md があるディレクトリの親 = skills/>
+eval "$(bash "${SKILLS_DIR}/expression-network-inference/scripts/fastbn_env.sh")"
 ```
 
-> **スクリプトの場所**: プラグインとして導入した場合は
-> `${CLAUDE_PLUGIN_ROOT}/skills/expression-network-inference/scripts/`、`skills/` を単独でコピーした
-> 場合はこの `SKILL.md` と同じディレクトリの `scripts/` にある。どちらでもない場合は
-> FastBN のチェックアウト内 (`${FASTBN_HOME}/skills/.../scripts/`) を使う。
+FastBN 本体が見つからない場合は `FASTBN_HOME` を指定するか
+`git clone https://github.com/kojima-r/FastBN.git` する。
 
 
 ## どのツールを使うか
