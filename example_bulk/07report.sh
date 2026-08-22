@@ -15,4 +15,4 @@ source ./config.sh
 
 "${BN_SCRIPTS}/make_report.sh" "$@"
 
-echo "[07report] ブラウザで開いて確認してください: $(pwd)/report.html"
+echo "[07report] ブラウザで開いて確認してください: $(cd "$(dirname "${REPORT_HTML}")" && pwd)/$(basename "${REPORT_HTML}")"

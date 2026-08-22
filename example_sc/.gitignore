@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+# ダウンロードしたデータ (00download.sh で再取得できる)
+data_bbknn_r_tissue_disc/
+data_ss_r_tissue_disc/
+*.tar.gz
+# 解析結果 (スクリプトで再生成できるのでコミットしない)
+run_*/
+# 一括実行 (bootstrap.sh) の nohup ログ
+bootstrap.log

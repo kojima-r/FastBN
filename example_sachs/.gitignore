@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+source/
+results*/
+# 一括実行 (bootstrap.sh) の nohup ログ
+bootstrap.log

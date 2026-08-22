@@ -40,6 +40,64 @@ cd FastBN/example_bulk
 ./08evaluate.sh           # 真の構造との比較 (ダミーデータのみ)
 ```
 
+### 全実験の一括実行 (`bootstrap.sh`)
+
+`run_all.sh` は 1 設定ぶんです。**時間をかけて全条件を回す**ときは
+`bootstrap.sh` を使います。共通設定を `export` したうえで、データの乱数シード
+(5 通り) x スコア (3) x 離散化段階 (2 / 3) x 最大親数 (2 / 3) = 60 ケースを
+1 行 1 実験で並べただけのスクリプトです。
+
+```bash
+export ITERS=5000
+export ITERS_BS=1500
+export BOOTSTRAP=10; export SEEDS=20; export MAX_JOBS=20
+...
+RUNDIR=./run_s1_bdeu_b3_p2  DUMMY_SEED=1 SCORE=bdeu N_BINS=3 MAX_PARENTS=2 ./run_all.sh
+RUNDIR=./run_s1_bdeu_b3_p3  DUMMY_SEED=1 SCORE=bdeu N_BINS=3 MAX_PARENTS=3 ./run_all.sh
+```
+
+出力は `run_s<seed>_<score>_b<段階>_p<最大親数>/` に分かれます。ダミーデータは
+真の DAG が既知なので、各ケースの `out/eval_hc.tsv` (学習網) と
+`out/eval_bs.tsv` (コンセンサス網) を並べれば設定の良し悪しをそのまま比較できます。
+
+#### 反復数 (`ITERS` / `ITERS_BS`) とリサンプル数の決め方
+
+反復数は実行時間ではなく**変数数 D とサンプル数 N から**決めています。
+
+1. Hill-Climb は成長段階では 1 反復に 1 辺しか足せないので、必要な反復数の
+   下限は学習される辺の本数 `|E|` そのものです。
+2. `|E| <= D x P_eff`。`P_eff = min(MAX_PARENTS, floor(log_r(N / 10)))` は
+   1 ノードが実際に持てる親の数です (`r` = 1 変数の状態数 = 離散化の段階数)。
+   親を `P` 個持つノードの CPT は `r^P` 通りの親設定を持ち、1 設定あたり
+   10 サンプル程度は無いと罰則付きスコアはその親を保持しないため、
+   **`P_eff` はサンプル数 `N` が決めます**。
+3. 成長後の修正 (REMOVE / REVERSE) と Tabu が局所最適から抜ける分に成長段階の
+   2 倍を見込み、`ITERS = 3 x D x P_eff`。
+4. ブートストラップは `out/edges.tsv` からの warm start なので成長段階が要らず、
+   `ITERS_BS = D x P_eff` (= `ITERS` の 1/3)。
+5. リサンプル総数 `B = BOOTSTRAP x SEEDS` はエッジ出現確率の標準誤差
+   `sqrt(p(1-p)/B) <= 0.5/sqrt(B)` から決めます。
+
+このデータは `D` = `TOP_VAR_GENES` = 60 変数、`N` = 4 群 x 30 反復 = 120 サンプルです。
+
+| 離散化 | `r` | `P_eff` | 必要な `ITERS` | 必要な `ITERS_BS` |
+| --- | --- | --- | --- | --- |
+| `N_BINS=2` | 2 | `min(3, floor(log2 12))` = 3 | 540 | 180 |
+| `N_BINS=3` | 3 | `min(3, floor(log3 12))` = 2 | 360 | 120 |
+
+真の DAG の辺が 60 本前後 (`DUMMY_EDGE_PROB=0.06` x `DUMMY_MAX_PARENTS=2`) なので
+妥当な桁です。既定の `ITERS=5000` / `ITERS_BS=1500` は必要量の 9 倍 / 8 倍あり、
+そのまま使っています。3 段階の方が必要反復が少ないのはサンプル数のためで、
+`N=120` で 3 値だと親 3 個は `3^3 = 27` 通りの親設定に対し 4.4 サンプル/設定しか
+なく、スコアが 3 個目の親を保持しません (2 値なら `2^3 = 8` 通りで 15 サンプル/設定)。
+
+リサンプル総数は `B = 10 x 20 = 200`。`SE <= 0.035` なので `THRESHOLD_PROB=0.3` の
+採否が ±0.07 (2SE) の精度で決まります。
+
+`RUNDIR` を指定すると `data` / `out` / `bs` / `groups` / `figures` /
+`report.html` がまるごとその下に出ます (既定は `.` = 従来どおりの配置)。
+`config.sh` の変数はすべて環境変数で上書きできます。
+
 ## ディレクトリ構成
 
 ```text
@@ -152,12 +210,12 @@ Hill-Climb + Tabu で DAG を学習 (`SCORE=bdeu`, `MAX_PARENTS=2`, `ITERS=5000`
 
 ```text
  n_true_edges                  : 57      ← 両端が解析対象に残った真のエッジ
- n_learned_edges               : 62
- undirected_precision          : 0.50    ← 骨格 (向きを無視) の一致
+ n_learned_edges               : 66
+ undirected_precision          : 0.47    ← 骨格 (向きを無視) の一致
  undirected_recall             : 0.54
- undirected_f1                 : 0.52
- directed_f1                   : 0.29    ← 向きも含めた一致
- reversed_edges                : 14      ← 骨格は当たっているが向きが逆
+ undirected_f1                 : 0.50
+ directed_f1                   : 0.23    ← 向きも含めた一致
+ reversed_edges                : 17      ← 骨格は当たっているが向きが逆
 ```
 
 骨格の半分程度を復元できています。有向の一致が低いのは、**観測データだけでは
@@ -168,6 +226,14 @@ Hill-Climb + Tabu で DAG を学習 (`SCORE=bdeu`, `MAX_PARENTS=2`, `ITERS=5000`
 > 数値はサンプル数・変数数・離散化の段階数・スコア関数に強く依存します。
 > `config.sh` の `DUMMY_REPLICATES` を減らす (= サンプルを減らす) と精度が
 > どう落ちるか試すと、実データに必要なサンプル数の感覚がつかめます。
+
+> **この設定ではスコアが真の構造で最大になりません。** 120 サンプルに対し
+> 60 変数・3 段階離散化と情報が乏しいため、学習結果の BDeu (-7642.5) は
+> 真の構造そのもの (-7871.2) より高く出ます。つまり探索が完璧でも正解には
+> 戻らない領域です。指標が伸びないときは、探索の問題ではなくサンプル数・
+> 離散化・スコア設定の問題を先に疑ってください。真の構造がスコア最大に
+> なる条件での探索精度を見たい場合は
+> [`../example_bnlearn/`](../example_bnlearn/) を参照してください。
 
 ## 主な設定 (`config.sh` 抜粋)
 

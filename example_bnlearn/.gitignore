@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# ダウンロードした正解ネットワーク (00download.sh で再取得できる)
+networks/
+# ベンチマーク結果 (スクリプトで再生成できる)
+results*/
+# 一括実行 (bootstrap.sh) の nohup ログ
+bootstrap.log

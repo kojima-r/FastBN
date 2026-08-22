@@ -931,12 +931,28 @@ struct HillClimber {
         auto * __restrict nijk = newC.n_ijk.data();
         const int * __restrict jptr = jindex.data();
 
+        // u の桁を「昇順の正しい位置」に挿入するための重みを求める。
+        // 混合基数の桁順は g.parents(v)（= 昇順）に対応しており、
+        // computeCountsForNode_full / JIndexCache / deltaRemove もこの順を前提に
+        // している。ここで u を単に最下位桁として足すと（j2 = j*ru + xu）、
+        // u より大きい添字の親が既にいる場合に桁順が正準順とずれ、以後の
+        // REMOVE が別の親の桁をマージしてスコアが壊れる。
+        //   right_u = u より添字が大きい既存の親の基数の総乗（= u の桁の重み）
+        int right_u = 1;
+        {
+            const vector<int> Pa_v = g.parents(v);
+            for (size_t t = 0; t < Pa_v.size(); ++t)
+                if (Pa_v[t] > u) right_u *= ds.r[Pa_v[t]];
+        }
+        const int period_u = right_u * ru;
+
         // 各サンプルについて j' と k を1回で決めてカウント
         for (int n = 0; n < N; ++n) {
             const int j  = jptr[n];
             const int xu = ds.x(n, u);   // フラット配列アクセス
             const int k  = ds.x(n, v);
-            const int j2 = j * ru + xu;
+            // deltaRemove の写像 j -> (j/period)*right + (j%right) の逆写像
+            const int j2 = (j / right_u) * period_u + xu * right_u + (j % right_u);
 
             ++nij[j2];
             ++nijk[(size_t)j2 * r_i + k];
@@ -1814,7 +1830,9 @@ General options:
   --alpha <a>
       Smoothing coefficient for likelihood (default=1.0).
   --verbose
-      Enable verbose output.
+      Enable verbose output (default=on).
+  --quiet
+      Suppress detailed logging.
 
 Candidate parent selection:
   --cand-metric mi|chi2
@@ -1858,7 +1876,9 @@ Edge importance mode:
 
 Output & runtime:
   --verbose
-      Enable detailed logging.
+      Enable detailed logging (default=on).
+  --quiet
+      Suppress detailed logging.
 ---------------------------------------------------------------------
 Example:
 ./fast_bn --input data.tsv --score bic --iters 2000 --tabu 20 --max-parent 3
@@ -1908,7 +1928,9 @@ General options:
   --alpha <a>
       スムージング係数（default=1.0）。
   --verbose
-      詳細ログを出力。
+      詳細ログを出力（default=有効）。
+  --quiet
+      詳細ログを抑制。
 
 Candidate parent selection:
   --cand-metric mi|chi2
@@ -1958,7 +1980,9 @@ Output & runtime:
   --bootstrap-include-zero
       出現しないエッジも出力。
   --verbose
-      詳細ログ出力。
+      詳細ログ出力（default=有効）。
+  --quiet
+      詳細ログを抑制。
 
 ---------------------------------------------------------------------
 例:
@@ -2072,6 +2096,7 @@ int main(int argc, char** argv){
         else if (need("--bootstrap"))             bootstrap_B = stoi(argv[++i]);
         else if (need("--seed"))        seed = stoull(argv[++i]);
         else if (need("--save-bootstrap-counts")) save_bootstrap_counts = argv[++i];
+        else if (a=="--verbose") verbose=true;   // 既定で有効（明示指定も受け付ける）
         else if (a=="--quiet") verbose=false;
         else { cerr<<"Unknown option: "<<a<<"\n"; return 1; }
     }

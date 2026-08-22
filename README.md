@@ -22,7 +22,10 @@ Includes:
 | `compute_bs_prob.py`                | Python 3 | Postprocessor: integrate bootstrap runs into a consensus structure   |
 | `init_edges.tsv` / `all_counts.tsv` | TSV      | Intermediate structures saved/loaded between runs                    |
 | `script/`                           | Bash+Py  | Reusable pipeline for **bulk RNA expression data**: preprocessing (normalize → log → filter → discretize), learning, edge importance, bootstrap stability, per-group comparison, plots, HTML report — see `script/README.md` |
-| `example/`                          | Bash     | Minimal `fast_bn` walkthrough on pre-discretized mouse expression data |
+| `example_sc/`                       | Bash+Py  | End-to-end pipeline example on **pre-discretized single-cell** mouse expression data (switchable dataset / discretization / #genes; groups = tissues) — see `example_sc/README.md` |
+| `example_bnlearn/`                  | Bash+Py  | **Benchmark** against the bnlearn repository (`asia`, `cancer`, `earthquake`, `sachs`, `survey`): sample from the true network, learn, and score with SHD / directed & skeleton P-R-F1 / SID / KL — see `example_bnlearn/README.md` |
+| `example_sachs/`                    | Bash+Py  | **Benchmark** on the Sachs single-cell protein-signaling data (Zenodo) against the experimentally validated pathway — see `example_sachs/README.md` |
+| `example_dream/`                    | Bash+Py  | **Benchmark** on the DREAM challenges (DREAM4 in silico, DREAM5; HPN-DREAM needs manual Synapse download) — see `example_dream/README.md` |
 | `example_bulk/`                     | Bash+Py  | End-to-end pipeline example on generated dummy bulk RNA counts (true network known, so accuracy is measurable) — see `example_bulk/README.md` |
 
 ### Analyzing your own bulk RNA expression data

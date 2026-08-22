@@ -7,3 +7,6 @@ figures/
 figures_bs/
 report.html
 target_genes.txt
+# 一括実行 (bootstrap.sh) の出力と nohup ログ
+run_*/
+bootstrap.log

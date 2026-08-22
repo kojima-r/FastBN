@@ -42,6 +42,12 @@ my_analysis/            ← 解析ディレクトリ (どこに作ってもよ�
 | `run_pipeline.sh` | Bash | 上記を一括実行するドライバ | 一式 |
 | `make_dummy_expr.py` | Py | 真の DAG が既知のダミーデータ生成 | `counts.tsv`, `sample_meta.tsv`, `true_edges.tsv` |
 | `compare_edges.py` | Py | 学習結果を既知の正解構造と比較 (P/R/F1, SHD) | 評価 TSV |
+| `evaluate_structure.py` | Py | 正解 DAG に対する評価: SHD / Directed・Skeleton の P/R/F1 / SID / KL | 指標 TSV・JSON |
+| `bif_io.py` | Py | BIF 形式のベイジアンネットワークの読み込み・サンプリング・同時分布展開 | データ TSV, 正解エッジ |
+| `summarize_benchmark.py` | Py | 評価結果を条件ごとに集約 (平均 ± 標準偏差) | 集約 TSV・Markdown・PNG |
+| `plot_dag_comparison.py` | Py | 正解 DAG と学習 DAG を同じ配置で並べて描画 (一致/逆向き/余分/見落としを色分け) | 比較図 PNG |
+| `discretize_matrix.py` | Py | 連続値行列を等頻度/等幅で離散化して fast_bn 入力にする (変数の絞り込みつき) | 離散化 TSV, 変数対応表 |
+| `make_benchmark_report.py` | Py | 集約表・グラフ・比較図を 1 つの HTML に集約 | `report.html` |
 | `common.sh` | Bash | 共通設定・パス解決・ログ (各 `*.sh` が source) | — |
 
 ## 依存
@@ -272,5 +278,6 @@ precision / recall / F1、逆向きエッジ数、SHD 相当を出します。�
 | `run_importance_groups.sh` | `importance_groups.sh` + `check_column_alignment.py` |
 | `viz/*` , `make_report.py` | `visualize.py`, `viz_subsets.py`, `make_report.py` (パスを引数化) |
 
-`fast_bn` 自体のオプションはリポジトリ直下の `../README.md`、素の使い方は
-`../example/` を参照してください。
+`fast_bn` 自体のオプションはリポジトリ直下の `../README.md` を参照してください。
+離散化済みデータ (単一細胞) にこのパイプラインを適用した例は `../example_sc/` に
+あります。
