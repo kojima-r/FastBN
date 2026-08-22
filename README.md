@@ -27,6 +27,74 @@ Includes:
 | `example_sachs/`                    | Bash+Py  | **Benchmark** on the Sachs single-cell protein-signaling data (Zenodo) against the experimentally validated pathway — see `example_sachs/README.md` |
 | `example_dream/`                    | Bash+Py  | **Benchmark** on the DREAM challenges (DREAM4 in silico, DREAM5; HPN-DREAM needs manual Synapse download) — see `example_dream/README.md` |
 | `example_bulk/`                     | Bash+Py  | End-to-end pipeline example on generated dummy bulk RNA counts (true network known, so accuracy is measurable) — see `example_bulk/README.md` |
+| `.claude-plugin/`, `skills/`, `commands/` | Markdown+Bash+Py | Claude Code plugin / marketplace manifests, Agent Skills and slash commands that drive this pipeline from an agent — see [Use from Claude Code / Claude Science](#-use-from-claude-code--claude-science-plugin--skills) |
+
+## 🔌 Use from Claude Code / Claude Science (plugin & skills)
+
+This repository doubles as a Claude Code **plugin marketplace**. `.claude-plugin/marketplace.json`
+lists one plugin, `bn-analysis`, whose root is the repository itself — so installing the plugin
+brings `fast_bn.cpp`, `script/` and the runnable examples along with the skills, and
+`${CLAUDE_PLUGIN_ROOT}` points at a complete FastBN checkout.
+
+### Install as a plugin
+
+```bash
+/plugin marketplace add kojima-r/FastBN
+/plugin install bn-analysis@fastbn
+```
+
+Working from a local checkout (development / testing):
+
+```bash
+claude --plugin-dir /path/to/FastBN     # load for one session
+claude plugin validate /path/to/FastBN  # check the manifests
+```
+
+### What the plugin provides
+
+| Component | Name | Role |
+| --- | --- | --- |
+| Skill | `expression-network-inference` | An expression matrix arrives → inspect it, derive parameters, run preprocess → learn → importance → bootstrap → per-group → figures → `report.html`, then interpret the result |
+| Skill | `network-structure-evaluation` | Score a learned DAG against a known pathway, a gold standard, a BIF network or a simulation's true DAG (SHD, directed/skeleton P-R-F1, SID, KL) |
+| Command | `/bn-analysis:analyze <matrix> [meta] [dir]` | End-to-end network inference from a data file |
+| Command | `/bn-analysis:setup [--smoke-test]` | Resolve/build `fast_bn`, check Python deps, optional end-to-end smoke test |
+| Command | `/bn-analysis:evaluate <true-edges\|bif>` | Compare a learned network with a reference structure |
+
+The skills carry the operational knowledge that is easy to get wrong: node index = column
+position, the `--iters 0` idiom, `--seed` (not `--bootstrap-seed`), how `ITERS` /
+`MAX_PARENTS` / `N_BINS` / bootstrap counts follow from D, N and the number of bins, and why
+edge directions must not be reported as causal claims.
+
+### Use as a plain skills directory (Claude Science, claude.ai, other agents)
+
+`skills/` follows the standard Agent Skills layout (`<name>/SKILL.md` + `references/` +
+`scripts/`), so it can be used without the plugin machinery: copy a skill directory into
+`~/.claude/skills/` (or `.claude/skills/` for one project), or upload it as a custom skill.
+In that mode point the helper scripts at this repository:
+
+```bash
+export FASTBN_HOME=/path/to/FastBN
+```
+
+### Helper scripts (usable directly)
+
+```bash
+S=skills/expression-network-inference/scripts
+
+bash $S/fastbn_env.sh --check                 # locate FastBN, build the binary, check deps
+python3 $S/inspect_matrix.py --input counts.tsv --meta sample_meta.tsv
+                                              # orientation / value type / N / D / variance
+                                              # + recommended parameters with reasoning
+bash $S/new_analysis.sh my_analysis --expr counts.tsv --meta sample_meta.tsv
+                                              # scaffold an analysis dir with a filled config.sh
+```
+
+`inspect_matrix.py` decides raw counts vs. normalized vs. already-log-transformed vs. already
+discretized, separates annotation columns (including numeric ones such as `gene_length`), and
+derives `NORMALIZE` / `N_BINS` / `MAX_PARENTS` / `TOP_VAR_GENES` / `ITERS` / bootstrap counts
+from N, D and the variance distribution.
+
+---
 
 ### Analyzing your own bulk RNA expression data
 

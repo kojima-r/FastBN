@@ -1,0 +1,37 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "fastbn",
+  "description": "Bayesian network structure learning for omics data — network inference, edge stability, and visualization powered by FastBN",
+  "version": "0.1.0",
+  "owner": {
+    "name": "Ryosuke Kojima",
+    "url": "https://github.com/kojima-r/FastBN"
+  },
+  "plugins": [
+    {
+      "name": "bn-analysis",
+      "source": "./",
+      "displayName": "Bayesian Network Analysis (FastBN)",
+      "description": "Infer, score, bootstrap and visualize Bayesian networks from expression matrices (bulk RNA-seq, single-cell, proteomics) with the FastBN Hill-Climb + Tabu learner, and benchmark the result against a known network.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Ryosuke Kojima"
+      },
+      "homepage": "https://github.com/kojima-r/FastBN",
+      "repository": "https://github.com/kojima-r/FastBN",
+      "license": "MIT",
+      "category": "science",
+      "keywords": [
+        "bayesian-network",
+        "structure-learning",
+        "causal-discovery",
+        "gene-regulatory-network",
+        "rna-seq",
+        "single-cell",
+        "bioinformatics",
+        "network-visualization"
+      ],
+      "tags": ["science", "bioinformatics", "statistics", "visualization"]
+    }
+  ]
+}

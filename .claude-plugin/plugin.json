@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "bn-analysis",
+  "displayName": "Bayesian Network Analysis (FastBN)",
+  "version": "0.1.0",
+  "description": "Infer, score, bootstrap and visualize Bayesian networks from expression matrices (bulk RNA-seq, single-cell, proteomics) with the FastBN Hill-Climb + Tabu learner, and benchmark the result against a known network.",
+  "author": {
+    "name": "Ryosuke Kojima"
+  },
+  "homepage": "https://github.com/kojima-r/FastBN",
+  "repository": "https://github.com/kojima-r/FastBN",
+  "license": "MIT",
+  "keywords": [
+    "bayesian-network",
+    "structure-learning",
+    "causal-discovery",
+    "gene-regulatory-network",
+    "rna-seq",
+    "single-cell",
+    "bioinformatics",
+    "network-visualization"
+  ]
+}
