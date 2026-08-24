@@ -71,6 +71,7 @@ source ./config.sh
 "${BN_SCRIPTS}/importance_groups.sh"   # 5) 群別重要度 (群ラベルがある場合)
 "${BN_SCRIPTS}/viz.sh" --metrics "${VIZ_METRICS}" --top-n "${VIZ_TOP_N}"   # 6) 図
 "${BN_SCRIPTS}/make_report.sh"         # 7) report.html
+python3 "${FASTBN_HOME}/viewer/serve.py" --root . --no-browser   # 8) 対話ビューア (任意)
 ```
 
 `script/viz*.sh` は `VIZ_METRICS` / `VIZ_TOP_N` を**読まない** (環境変数を読むのは
@@ -88,6 +89,9 @@ source ./config.sh
 各ステージの環境変数・出力・コストは `references/pipeline-stages.md`。
 
 ### 4. 結果を読んで報告する
+
+静止画 (`figures/`) と `report.html` に加えて、**対話ビューア** (`viewer/serve.py`,
+cosmos.gl) の URL も案内すると、ユーザが自分で網を辿って確認できる。
 
 図とテーブルを貼るだけで終わらせない。`references/interpretation.md` に従って、
 エッジ重要度・ブートストラップ確率・群間差を解釈し、**マルコフ同値による向きの

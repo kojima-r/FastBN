@@ -154,6 +154,18 @@ OUT_PREFIX=integ_edge_importance "${BN_SCRIPTS}/importance_groups.sh"
 
 図の一覧と読み方は `interpretation.md`。
 
+**対話的に確認したいとき**は静止画ではなくビューアを使う (cosmos.gl の WebGL 力学グラフ)。
+
+```bash
+python3 "${FASTBN_HOME}/viewer/serve.py" --root .        # この解析ディレクトリの網だけ
+python3 "${FASTBN_HOME}/viewer/serve.py" --list          # 見つかった網の一覧
+```
+
+学習網とコンセンサス網を切り替え、エッジを |metric| / ブートストラップ確率 /
+正解との判定で色分けし、遺伝子を検索して親子関係を辿れる。ユーザに結果を見せる
+ときは、静止画 + `report.html` に加えてこの URL を案内する (詳細は
+`${FASTBN_HOME}/viewer/README.md`)。
+
 ## 7. make_report.sh
 
 図・重要度テーブル・データ要約を 1 枚の `report.html` に集約 (存在する成果物のみ

@@ -27,6 +27,7 @@ Includes:
 | `example_sachs/`                    | Bash+Py  | **Benchmark** on the Sachs single-cell protein-signaling data (Zenodo) against the experimentally validated pathway — see `example_sachs/README.md` |
 | `example_dream/`                    | Bash+Py  | **Benchmark** on the DREAM challenges (DREAM4 in silico, DREAM5; HPN-DREAM needs manual Synapse download) — see `example_dream/README.md` |
 | `example_bulk/`                     | Bash+Py  | End-to-end pipeline example on generated dummy bulk RNA counts (true network known, so accuracy is measurable) — see `example_bulk/README.md` |
+| `viewer/`                           | Py+JS    | Interactive network viewer built on [cosmos.gl](https://github.com/cosmosgl/graph) (GPU force graph). `python3 viewer/serve.py` finds every learned network under the repository and opens it in the browser — see `viewer/README.md` |
 | `skills/`, `commands/`, `.claude-plugin/`, `.codex-plugin/` | Markdown+Bash+Py | Agent Skills (shared by Claude Code and OpenAI Codex), Claude slash commands, and both plugin/marketplace manifests — see [Use from coding agents](#-use-from-coding-agents-claude-code--claude-science--codex) |
 
 ## 🔌 Use from coding agents (Claude Code / Claude Science / Codex)
@@ -127,6 +128,46 @@ bash $S/new_analysis.sh my_analysis --expr counts.tsv --meta sample_meta.tsv
 discretized, separates annotation columns (including numeric ones such as `gene_length`), and
 derives `NORMALIZE` / `N_BINS` / `MAX_PARENTS` / `TOP_VAR_GENES` / `ITERS` / bootstrap counts
 from N, D and the variance distribution.
+
+---
+
+## 🔭 Interactive viewer (cosmos.gl)
+
+`figures/*.png` are static; `viewer/` is for exploring a network interactively. It renders the
+learned DAG with [cosmos.gl](https://github.com/cosmosgl/graph) — a WebGL force graph that runs
+the layout on the GPU.
+
+```bash
+python3 viewer/serve.py        # scans the repo, opens the browser, no build step, no network access
+```
+
+It starts on the learned network of `example_bulk/out`, and the dropdown lists **every** network
+found under the repository (all `example_*` benchmark runs included — 350+ in a full checkout), so
+the already-computed examples can be inspected right away. If nothing has been learned yet, run
+`example_bulk/run_all.sh` (1–2 min) first.
+
+* Edge color and width: `|ΔlogL|` / `|ΔBIC|` / `|ΔK2|` / `|ΔBDeu|` (same absolute values as
+  `visualize.py`), bootstrap probability, or the TP/FP/FP_reversed/FN verdict from
+  `eval_*_edges.tsv` — rank-normalized.
+* Edge filtering has two modes: **simple** (top X% by the attribute used for color) and
+  **advanced**, which combines thresholds on *several* metrics at once with AND/OR — e.g.
+  "`|ΔlogL|` in the top 30% **and** bootstrap probability ≥ 0.8". Each condition takes a
+  percentile or an absolute threshold (`≥`/`≤`), verdict conditions take a set of
+  TP/FP/FP_reversed/FN, and every condition reports how many edges it passes on its own.
+* Both modes draw a **histogram of the metric** so a threshold can be chosen from the actual
+  distribution: grey bars are the distribution, the blue overlay is the part that passes, an
+  amber curve shows how many edges would survive at each cut point, and a red marker sits at the
+  current threshold. Click or drag on the histogram to set the threshold; importance
+  distributions are heavily skewed, so a log count axis is one checkbox away.
+* Node color: source (no parents) / internal / sink (no children) / target gene; size = degree.
+* Click or search a gene to see its parents and children with their importance values, and to
+  focus its neighborhood; arrows point parent → child.
+* `python3 viewer/serve.py --root my_analysis` limits the scan to one analysis directory;
+  `--list` prints what was found; `--select <id>` picks the network to open with.
+
+Everything is Python standard library plus a vendored cosmos.gl UMD build (MIT) in
+`viewer/vendor/`, so there is no npm/bundler step and the viewer works offline. Details, including
+which files each network is assembled from, are in [`viewer/README.md`](viewer/README.md).
 
 ---
 
